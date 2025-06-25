@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tracecat
+    env: docker
+    repo: https://github.com/TracecatHQ/tracecat
+    branch: 0.37.2
+    plan: free
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: SUPERADMIN_EMAIL
+        value: ragan4u@gmail.com
+      - key: DOMAIN
+        value: render.com
+      # Add other environment variables as needed
