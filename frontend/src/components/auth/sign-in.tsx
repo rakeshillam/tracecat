@@ -9,7 +9,7 @@ import type React from "react"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { GoogleOAuthButton } from "@/components/auth/oauth-buttons"
+import { OidcOAuthButton } from "@/components/auth/oauth-buttons"
 import { SamlSSOButton } from "@/components/auth/saml"
 import { Icons } from "@/components/icons"
 import { CenteredSpinner } from "@/components/loading/spinner"
@@ -31,11 +31,15 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { toast } from "@/components/ui/use-toast"
+import { useAuth, useAuthActions } from "@/hooks/use-auth"
 import { useAppInfo } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
-import { useAuth } from "@/providers/auth"
 
-export function SignIn({ className }: React.HTMLProps<HTMLDivElement>) {
+interface SignInProps extends React.HTMLProps<HTMLDivElement> {
+  returnUrl?: string | null
+}
+
+export function SignIn({ className, returnUrl }: SignInProps) {
   const { user } = useAuth()
   const { appInfo, appInfoIsLoading, appInfoError } = useAppInfo()
   const router = useRouter()
@@ -51,10 +55,12 @@ export function SignIn({ className }: React.HTMLProps<HTMLDivElement>) {
   }
 
   const allowedAuthTypes: string[] = appInfo?.auth_allowed_types ?? []
-  const showBasicAuth =
-    allowedAuthTypes.includes("basic") && appInfo?.auth_basic_enabled
-  const showGoogleOauthAuth =
-    allowedAuthTypes.includes("google_oauth") && appInfo?.oauth_google_enabled
+  const showBasicAuth = allowedAuthTypes.includes("basic")
+  const showGenericOidcAuth = allowedAuthTypes.includes("oidc")
+  const showGoogleOauthAuth = allowedAuthTypes.includes("google_oauth")
+  const showOidcAuth = showGenericOidcAuth || showGoogleOauthAuth
+  const oidcProviderLabel = showGenericOidcAuth ? "Single sign-on" : "Google"
+  const oidcProviderIcon = showGenericOidcAuth ? "saml" : "google"
   const showSamlAuth =
     allowedAuthTypes.includes("saml") && appInfo?.saml_enabled
   return (
@@ -74,7 +80,7 @@ export function SignIn({ className }: React.HTMLProps<HTMLDivElement>) {
         </CardHeader>
         <CardContent className="flex-col space-y-2">
           {showBasicAuth && <BasicLoginForm />}
-          {showBasicAuth && (showGoogleOauthAuth || showSamlAuth) && (
+          {showBasicAuth && (showOidcAuth || showSamlAuth) && (
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
                 <span className="w-full border-t" />
@@ -86,15 +92,31 @@ export function SignIn({ className }: React.HTMLProps<HTMLDivElement>) {
               </div>
             </div>
           )}
-          {showGoogleOauthAuth && <GoogleOAuthButton className="w-full" />}
-          {showSamlAuth && <SamlSSOButton className="w-full" />}
+          {showOidcAuth && (
+            <OidcOAuthButton
+              className="w-full"
+              returnUrl={returnUrl}
+              providerLabel={oidcProviderLabel}
+              providerIcon={oidcProviderIcon}
+            />
+          )}
+          {showSamlAuth && (
+            <SamlSSOButton className="w-full" returnUrl={returnUrl} />
+          )}
           {/* <GithubOAuthButton disabled className="hover:cur" /> */}
         </CardContent>
         {showBasicAuth && (
           <CardFooter className="flex items-center justify-center text-sm text-muted-foreground">
             <div className="mt-4 text-center">
               Don&apos;t have an account?{" "}
-              <Link href="/sign-up" className="underline">
+              <Link
+                href={
+                  returnUrl
+                    ? `/sign-up?returnUrl=${encodeURIComponent(returnUrl)}`
+                    : "/sign-up"
+                }
+                className="underline"
+              >
                 Sign up
               </Link>
             </div>
@@ -115,7 +137,7 @@ type BasicLoginForm = z.infer<typeof basicLoginSchema>
 
 export function BasicLoginForm() {
   const [isLoading, setIsLoading] = useState(false)
-  const { login } = useAuth()
+  const { login } = useAuthActions()
   const form = useForm<BasicLoginForm>({
     resolver: zodResolver(basicLoginSchema),
     defaultValues: {

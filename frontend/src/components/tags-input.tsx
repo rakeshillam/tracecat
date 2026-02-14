@@ -1,6 +1,6 @@
 "use client"
 
-import type { TagInputProps } from "emblor"
+import type { Tag as _Tag, TagInputProps } from "emblor"
 import { TagInput as EmblorTagInput } from "emblor"
 import fuzzysort from "fuzzysort"
 import { ChevronDown, X } from "lucide-react"
@@ -17,6 +17,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
+export type Tag = _Tag
 // Define the props we want to expose to consumers
 type CustomTagInputProps = Omit<
   TagInputProps,
@@ -37,19 +38,16 @@ export function CustomTagInput(props: CustomTagInputProps) {
       setActiveTagIndex={setActiveTagIndex}
       styleClasses={{
         input: "shadow-none text-xs",
-        inlineTagsContainer: "shadow-sm h-9 items-center border text-xs",
+        // Allow chips to wrap onto new lines and avoid fixed height to prevent spillover
+        inlineTagsContainer:
+          "shadow-sm min-h-9 flex flex-wrap items-center gap-1 border text-xs",
         tag: {
-          body: "h-5 text-xs",
+          body: "h-5 text-xs border-[0.5px]",
+          closeButton: "px-1.5",
         },
       }}
     />
   )
-}
-
-export interface Tag {
-  id: string
-  text: string
-  value: string
 }
 
 export interface Suggestion {
@@ -70,6 +68,14 @@ export interface MultiTagCommandInputProps {
   disabled?: boolean
   maxTags?: number
   searchKeys: (keyof Suggestion)[]
+  /**
+   * Allow users to add custom tags by pressing Enter, even if not in suggestions
+   */
+  allowCustomTags?: boolean
+  /**
+   * Disable the suggestions dropdown and arrow indicator
+   */
+  disableSuggestions?: boolean
 }
 
 export function MultiTagCommandInput({
@@ -81,6 +87,8 @@ export function MultiTagCommandInput({
   disabled = false,
   maxTags,
   searchKeys,
+  allowCustomTags = false,
+  disableSuggestions = false,
 }: MultiTagCommandInputProps) {
   const [open, setOpen] = useState(false)
   const [inputValue, setInputValue] = useState("")
@@ -104,6 +112,7 @@ export function MultiTagCommandInput({
           id: `${index}`,
           text: suggestion?.label || val,
           value: val,
+          icon: suggestion?.icon,
         }
       }) || []
     )
@@ -151,10 +160,35 @@ export function MultiTagCommandInput({
     setHighlightedIndex(-1) // Reset highlight when typing
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      // Always prevent default form submission when Enter is pressed
+      e.preventDefault()
+      e.stopPropagation()
+
+      if (allowCustomTags && inputValue.trim()) {
+        // Don't add if it already exists or if we've hit the max
+        if (
+          valueSet.has(inputValue.trim()) ||
+          (maxTags && value.length >= maxTags)
+        ) {
+          return
+        }
+
+        const newValue = [...value, inputValue.trim()]
+        onChange?.(newValue)
+        setInputValue("")
+        setHighlightedIndex(-1)
+      }
+    }
+  }
+
   const handleFocus = () => {
-    setOpen(true) // Always show when focused
-    // Set to first item if there are suggestions, otherwise -1
-    setHighlightedIndex(filteredSuggestions.length > 0 ? 0 : -1)
+    if (!disableSuggestions) {
+      setOpen(true) // Only show dropdown when suggestions are enabled
+      // Set to first item if there are suggestions, otherwise -1
+      setHighlightedIndex(filteredSuggestions.length > 0 ? 0 : -1)
+    }
   }
 
   const handleBlur = () => {
@@ -181,7 +215,16 @@ export function MultiTagCommandInput({
                 variant="secondary"
                 className="gap-1 pr-1 text-xs"
               >
-                {tag.value}
+                {tag.icon ? (
+                  <span className="flex items-center gap-1">
+                    <span className="flex items-center justify-center rounded-sm bg-transparent">
+                      {tag.icon}
+                    </span>
+                    <span>{tag.text}</span>
+                  </span>
+                ) : (
+                  tag.text
+                )}
                 {!disabled && (
                   <button
                     type="button"
@@ -203,6 +246,7 @@ export function MultiTagCommandInput({
               type="text"
               value={inputValue}
               onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={handleKeyDown}
               onFocus={handleFocus}
               onBlur={handleBlur}
               disabled={disabled}

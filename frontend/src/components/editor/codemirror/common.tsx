@@ -41,6 +41,7 @@ import {
 import {
   AtSignIcon,
   BracesIcon,
+  DatabaseIcon,
   DollarSignIcon,
   FunctionSquareIcon,
   KeyIcon,
@@ -54,6 +55,8 @@ import {
   editorValidateExpression,
   type SecretReadMinimal,
   secretsListSecrets,
+  type VariableReadMinimal,
+  variablesListVariables,
 } from "@/client"
 
 import { createTemplateRegex } from "@/lib/expressions"
@@ -107,6 +110,7 @@ export const CONTEXT_ICONS = {
   FN: () => <FunctionSquareIcon {...commonIconStyle} />,
   ENV: () => <DollarSignIcon {...commonIconStyle} />,
   SECRETS: () => <KeyIcon {...commonIconStyle} />,
+  VARS: () => <DatabaseIcon {...commonIconStyle} />,
   var: () => <BracesIcon {...commonIconStyle} />,
 } as const
 
@@ -152,10 +156,11 @@ export interface TemplateExpressionValidation {
   }>
 }
 
-// Caches for functions, actions, and secrets
+// Caches for functions, actions, secrets, and variables
 export const functionCache = new Map<string, EditorFunctionRead[]>()
 export const actionCache = new Map<string, ActionRead[]>()
 export const secretsCache = new Map<string, SecretReadMinimal[]>()
+export const variablesCache = new Map<string, VariableReadMinimal[]>()
 
 export async function fetchFunctions(
   workspaceId: string
@@ -208,32 +213,57 @@ export async function validateTemplateExpression(
 // State management for editable pills
 export const setEditingRange = StateEffect.define<Range<Decoration> | null>()
 
+/**
+ * StateField that manages the currently editing template pill range.
+ * This field tracks which template pill (if any) is currently being edited,
+ * and provides decorations to highlight the editing state.
+ *
+ * The field handles:
+ * - Setting/clearing the editing range via setEditingRange effects
+ * - Updating range positions when document changes occur
+ * - Clearing editing state when cursor moves outside the range
+ * - Providing decorations to visually highlight the editing pill
+ */
 export const editingRangeField = StateField.define<Range<Decoration> | null>({
   create: () => null,
   update(value, tr) {
+    // Check for explicit setEditingRange effects first
     for (const effect of tr.effects) {
       if (effect.is(setEditingRange)) {
         return effect.value
       }
     }
+
+    // If we have an active editing range and the document changed,
+    // update the range positions to account for text insertions/deletions
     if (value && tr.docChanged) {
       const from = tr.changes.mapPos(value.from, 1)
       const to = tr.changes.mapPos(value.to, -1)
+
+      // If the range collapsed due to changes, clear it
       if (from >= to) {
         return null
       }
+
+      // Update the range with new positions
       value = { from, to, value: value.value }
     }
+
+    // If we have an active editing range, check if cursor is still within it
     if (value) {
       const head = tr.state.selection.main.head
+
+      // Clear editing state if cursor moved outside the range
       if (head < value.from || head > value.to) {
         return null
       }
     }
+
     return value
   },
   provide: (f) =>
     EditorView.decorations.from(f, (value) => {
+      // Convert the editing range to decorations for visual highlighting
       return value ? Decoration.set([value]) : Decoration.none
     }),
 })
@@ -517,6 +547,7 @@ export class InnerContentWidget extends WidgetType {
         FN: "#8b5cf6",
         ENV: "#10b981",
         SECRETS: "#f59e0b",
+        VARS: "#06b6d4",
         var: "#ef4444",
       }
 
@@ -777,13 +808,12 @@ export function createExpressionNodeHover(workspaceId: string) {
         }
       }
     }
-
     return null
   })
 }
 
 // Helper function to create tooltip for a specific position within an expression
-async function createNodeTooltipForPosition(
+export async function createNodeTooltipForPosition(
   view: EditorView,
   expression: string,
   relativePos: number,
@@ -815,10 +845,10 @@ async function createNodeTooltipForPosition(
 
       // Prefer tokens that start with context keywords (ACTIONS, FN, etc.)
       const currentIsContextToken = current.value.match(
-        /^(ACTIONS|FN|SECRETS|ENV|TRIGGER|var)\b/
+        /^(ACTIONS|FN|SECRETS|VARS|ENV|TRIGGER|var)\b/
       )
       const longestIsContextToken = longest.value.match(
-        /^(ACTIONS|FN|SECRETS|ENV|TRIGGER|var)\b/
+        /^(ACTIONS|FN|SECRETS|VARS|ENV|TRIGGER|var)\b/
       )
 
       if (currentIsContextToken && !longestIsContextToken) {
@@ -883,6 +913,8 @@ async function createNodeTooltipContent(
     await addFunctionTooltipInfo(container, tokenValue, workspaceId)
   } else if (fullExpression.startsWith("SECRETS.")) {
     addSecretTooltipInfo(container, tokenValue)
+  } else if (fullExpression.startsWith("VARS.")) {
+    addVarsTooltipInfo(container, tokenValue)
   } else if (fullExpression.startsWith("ENV.")) {
     addEnvTooltipInfo(container, tokenValue)
   } else if (fullExpression.startsWith("TRIGGER")) {
@@ -891,6 +923,7 @@ async function createNodeTooltipContent(
     token.type === "ACTIONS" ||
     token.type === "FN" ||
     token.type === "SECRETS" ||
+    token.type === "VARS" ||
     token.type === "ENV" ||
     token.type === "TRIGGER"
   ) {
@@ -901,6 +934,8 @@ async function createNodeTooltipContent(
       await addFunctionTooltipInfo(container, tokenValue, workspaceId)
     } else if (token.type === "SECRETS") {
       addSecretTooltipInfo(container, tokenValue)
+    } else if (token.type === "VARS") {
+      addVarsTooltipInfo(container, tokenValue)
     } else if (token.type === "ENV") {
       addEnvTooltipInfo(container, tokenValue)
     } else if (token.type === "TRIGGER") {
@@ -1028,6 +1063,37 @@ function addSecretTooltipInfo(container: HTMLElement, value: string) {
   container.appendChild(info)
 }
 
+function addVarsTooltipInfo(container: HTMLElement, value: string) {
+  const info = document.createElement("div")
+  info.className = "cm-tooltip-vars-info"
+
+  const match = value.match(/VARS\.(\w+)(?:\.(.+))?/)
+  if (match) {
+    const [, varName, key] = match
+    info.innerHTML = `
+      <div class="vars-name">Variable: <strong>${varName}</strong></div>
+      ${key ? `<div class="vars-key">Key: <strong>${key}</strong></div>` : ""}
+      <div class="vars-desc">References workspace variable</div>
+    `
+  } else {
+    // Fallback for partial matches or just "VARS"
+    const cleanValue = value.replace(/^VARS\.?/, "")
+    if (cleanValue) {
+      info.innerHTML = `
+        <div class="vars-name">Variable reference: <strong>${cleanValue}</strong></div>
+        <div class="vars-desc">References workspace variable</div>
+      `
+    } else {
+      info.innerHTML = `
+        <div class="vars-name">Variables namespace</div>
+        <div class="vars-desc">Used to reference workspace variables</div>
+      `
+    }
+  }
+
+  container.appendChild(info)
+}
+
 function addEnvTooltipInfo(container: HTMLElement, value: string) {
   const info = document.createElement("div")
   info.className = "cm-tooltip-env-info"
@@ -1097,6 +1163,11 @@ export const TEMPLATE_SUGGESTIONS = [
     label: "SECRETS",
     detail: "Workspace secrets",
     info: "Access configured secrets and credentials",
+  },
+  {
+    label: "VARS",
+    detail: "Workspace variables",
+    info: "Access configured workspace variables",
   },
   {
     label: "ENV",
@@ -1225,6 +1296,7 @@ export function createMentionCompletion(): (
             suggestion.label === "ACTIONS" ||
             suggestion.label === "FN" ||
             suggestion.label === "SECRETS" ||
+            suggestion.label === "VARS" ||
             suggestion.label === "ENV" ||
             suggestion.label === "var"
           const labelWithDot = needsDot
@@ -1398,12 +1470,31 @@ export async function fetchSecrets(
     // Import the secrets function from the client
     const secrets = await secretsListSecrets({
       workspaceId,
-      type: ["custom"],
+      type: ["custom", "ssh-key", "mtls", "ca-cert"],
     })
     secretsCache.set(workspaceId, secrets)
     return secrets
   } catch (error) {
     console.warn("Failed to fetch secrets:", error)
+    return []
+  }
+}
+
+export async function fetchVariables(
+  workspaceId: string
+): Promise<VariableReadMinimal[]> {
+  if (variablesCache.has(workspaceId)) {
+    return variablesCache.get(workspaceId)!
+  }
+
+  try {
+    const variables = await variablesListVariables({
+      workspaceId,
+    })
+    variablesCache.set(workspaceId, variables)
+    return variables
+  } catch (error) {
+    console.warn("Failed to fetch variables:", error)
     return []
   }
 }
@@ -1513,6 +1604,120 @@ export function createSecretsCompletion(workspaceId: string) {
       }
     } catch (error) {
       console.warn("Failed to get secrets completions:", error)
+      return null
+    }
+  }
+}
+
+export function createVarsCompletion(workspaceId: string) {
+  return async (
+    context: CompletionContext
+  ): Promise<CompletionResult | null> => {
+    // Try to match variable key pattern first (VARS.variable_name.key)
+    const varKeyWord = context.matchBefore(/VARS\.\w+\.\w*/)
+    if (varKeyWord) {
+      try {
+        const variables = await fetchVariables(workspaceId)
+        const text = context.state.doc.sliceString(
+          varKeyWord.from,
+          varKeyWord.to
+        )
+
+        // Extract variable name and partial key from the text
+        const match = text.match(/^VARS\.(\w+)\.(\w*)$/)
+        if (!match) return null
+
+        const [, variableName, partialKey] = match
+
+        // Find the specific variable
+        const variable = variables.find((v) => v.name === variableName)
+        if (!variable || !variable.values) return null
+
+        const keys = Object.keys(variable.values)
+
+        // Filter keys based on partial input
+        const filteredKeys = keys.filter((key) =>
+          key.toLowerCase().startsWith(partialKey.toLowerCase())
+        )
+
+        if (filteredKeys.length === 0) return null
+
+        // Calculate the position to insert from (after the last dot)
+        const lastDotIndex = text.lastIndexOf(".")
+        const keyStartPosition = varKeyWord.from + lastDotIndex + 1
+
+        return {
+          from: keyStartPosition,
+          options: filteredKeys.map((key) => ({
+            label: key,
+            detail: "variable key",
+            info: `Variable key: ${variableName}.${key}`,
+            apply: (
+              view: EditorView,
+              completion: Completion,
+              from: number,
+              to: number
+            ) => {
+              view.dispatch({
+                changes: { from, to, insert: key },
+                selection: { anchor: from + key.length },
+              })
+            },
+          })),
+        }
+      } catch (error) {
+        console.warn("Failed to get variable key completions:", error)
+        return null
+      }
+    }
+
+    // Fall back to variable name completion (VARS.variable_name)
+    const varWord = context.matchBefore(/VARS\.\w*/)
+    if (!varWord) return null
+
+    try {
+      const variables = await fetchVariables(workspaceId)
+      const text = context.state.doc.sliceString(varWord.from, varWord.to)
+      const partialVar = text.replace(/^VARS\./, "")
+
+      const filteredVars = variables.filter((variable) =>
+        variable.name.toLowerCase().startsWith(partialVar.toLowerCase())
+      )
+
+      return {
+        from: varWord.from + 5,
+        options: filteredVars.map((variable) => {
+          const hasKeys =
+            variable.values && Object.keys(variable.values).length > 0
+          const keys = hasKeys ? Object.keys(variable.values) : []
+          return {
+            label: variable.name,
+            detail: "variable",
+            info: `Variable: ${variable.name}${variable.description ? ` - ${variable.description}` : ""}\nKeys: ${keys.join(", ") || "none"}`,
+            apply: (
+              view: EditorView,
+              completion: Completion,
+              from: number,
+              to: number
+            ) => {
+              // Add dot for variables that have keys to trigger key completion
+              const insertText = hasKeys ? `${variable.name}.` : variable.name
+
+              view.dispatch({
+                changes: { from, to, insert: insertText },
+                selection: { anchor: from + insertText.length },
+              })
+
+              // Trigger key completion for variables with keys
+              if (hasKeys) {
+                startCompletion(view)
+              }
+            },
+          }
+        }),
+      }
+    } catch (error) {
+      console.warn("Failed to get variables completions:", error)
       return null
     }
   }
@@ -1799,7 +2004,7 @@ export function createPillClickHandler() {
 
 // Blur handler to clear editing state
 export function createBlurHandler() {
-  return (event: FocusEvent, view: EditorView): boolean => {
+  return (_: FocusEvent, view: EditorView): boolean => {
     const currentEditingRange = view.state.field(editingRangeField)
     if (currentEditingRange) {
       view.dispatch({ effects: setEditingRange.of(null) })
@@ -1808,28 +2013,31 @@ export function createBlurHandler() {
   }
 }
 
+export const pillKeybinds: KeyBinding[] = [
+  {
+    key: "ArrowLeft",
+    run: enhancedCursorLeft,
+  },
+  {
+    key: "ArrowRight",
+    run: enhancedCursorRight,
+  },
+  {
+    key: "Enter",
+    run: (view: EditorView): boolean => {
+      const currentEditingRange = view.state.field(editingRangeField)
+      if (currentEditingRange) {
+        // Clear editing state on Enter key
+        view.dispatch({ effects: setEditingRange.of(null) })
+        return true
+      }
+      return false
+    },
+  },
+]
+
 export function createCoreKeymap(...extraKeymaps: KeyBinding[]) {
   return keymap.of([
-    {
-      key: "ArrowLeft",
-      run: enhancedCursorLeft,
-    },
-    {
-      key: "ArrowRight",
-      run: enhancedCursorRight,
-    },
-    {
-      key: "Enter",
-      run: (view: EditorView): boolean => {
-        const currentEditingRange = view.state.field(editingRangeField)
-        if (currentEditingRange) {
-          // Clear editing state on Enter key
-          view.dispatch({ effects: setEditingRange.of(null) })
-          return true
-        }
-        return false
-      },
-    },
     ...closeBracketsKeymap,
     ...standardKeymap,
     ...historyKeymap,
@@ -1855,6 +2063,7 @@ export function createAutocomplete({
       createActionCompletion(Object.values(actions).map((a) => a)),
       createVarCompletion(forEach),
       createSecretsCompletion(workspaceId),
+      createVarsCompletion(workspaceId),
       createEnvCompletion(),
     ],
   })
@@ -1926,6 +2135,10 @@ export const templatePillTheme = EditorView.theme({
     color: "#f59e0b !important",
     fontWeight: "600",
   },
+  ".cm-template-pill.cm-context-vars": {
+    color: "#06b6d4 !important",
+    fontWeight: "600",
+  },
   ".cm-template-pill.cm-context-var": {
     color: "#ef4444 !important",
     fontWeight: "600",
@@ -1951,7 +2164,7 @@ export const templatePillTheme = EditorView.theme({
     fontFamily: "ui-monospace, monospace",
   },
   ".cm-tooltip-action-info": {
-    color: "#93c5fd",
+    color: "#3b82f6",
   },
   ".cm-tooltip-action-info .action-ref": {
     marginBottom: "2px",
@@ -1973,7 +2186,7 @@ export const templatePillTheme = EditorView.theme({
   },
   ".cm-tooltip-function-info .function-params": {
     marginBottom: "2px",
-    color: "#a5b4fc",
+    color: "#6366f1",
     fontSize: "11px",
   },
   ".cm-tooltip-function-info .function-params code": {
@@ -2003,6 +2216,21 @@ export const templatePillTheme = EditorView.theme({
     color: "#fed7aa",
   },
   ".cm-tooltip-secret-info .secret-desc": {
+    fontSize: "11px",
+    color: "#9ca3af",
+    fontStyle: "italic",
+  },
+  ".cm-tooltip-vars-info": {
+    color: "#22d3ee",
+  },
+  ".cm-tooltip-vars-info .vars-name": {
+    marginBottom: "2px",
+  },
+  ".cm-tooltip-vars-info .vars-key": {
+    marginBottom: "2px",
+    color: "#a5f3fc",
+  },
+  ".cm-tooltip-vars-info .vars-desc": {
     fontSize: "11px",
     color: "#9ca3af",
     fontStyle: "italic",

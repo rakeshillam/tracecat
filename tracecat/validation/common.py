@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -6,9 +7,9 @@ from pydantic.alias_generators import to_camel
 from tracecat.expressions.common import ExprType
 from tracecat.expressions.validation import TemplateValidator
 from tracecat.logger import logger
-from tracecat.secrets.models import SecretSearch
+from tracecat.secrets.schemas import SecretSearch
 from tracecat.secrets.service import SecretsService
-from tracecat.validation.models import ExprValidationResult
+from tracecat.validation.schemas import ExprValidationResult
 
 
 def json_schema_to_pydantic(
@@ -37,8 +38,9 @@ def json_schema_to_pydantic(
     def create_field(prop_schema: dict[str, Any], enum_field_name: str) -> type:
         if "$ref" in prop_schema:
             referenced_schema = resolve_ref(prop_schema["$ref"])
-            # Pass the original model name for context if the ref is to a simple type that becomes an enum
-            return json_schema_to_pydantic(referenced_schema, base_schema, name=name)
+            # Resolve the referenced schema in-place so enum/object/array handling applies.
+            # This preserves enum -> Literal[...] behavior when $ref points to an enum schema.
+            return create_field(referenced_schema, enum_field_name)
 
         type_ = prop_schema.get("type")
         if "enum" in prop_schema:
@@ -63,8 +65,11 @@ def json_schema_to_pydantic(
         elif type_ == "array":
             items_schema = prop_schema.get("items", {})
             # Pass the field_name_for_enum for context in case array items are enums/objects
-            return list[create_field(items_schema, f"{enum_field_name}Item")]
+            return list[create_field(items_schema, f"{enum_field_name}Item")]  # type: ignore[invalid-type-form]
         elif type_ == "string":
+            format_type = prop_schema.get("format")
+            if format_type == "date-time":
+                return datetime
             return str
         elif type_ == "integer":
             return int
@@ -73,7 +78,7 @@ def json_schema_to_pydantic(
         elif type_ == "boolean":
             return bool
         else:
-            return Any  # type: ignore
+            return Any  # pyright: ignore[reportReturnType]
 
     properties: dict[str, Any] = schema.get("properties", {})
     required: list[str] = schema.get("required", [])
@@ -82,14 +87,14 @@ def json_schema_to_pydantic(
     for prop_name, prop_schema_val in properties.items():
         # Pass prop_name to create_field for enum name generation context
         created_type = create_field(prop_schema_val, prop_name)
-        field_type = Annotated[created_type, TemplateValidator()]
+        field_type = Annotated[created_type, TemplateValidator()]  # type: ignore[invalid-type-form]
         field_params = {}
 
         if "description" in prop_schema_val:
             field_params["description"] = prop_schema_val["description"]
 
         if prop_name not in required:
-            field_type = field_type | None
+            field_type = field_type | None  # pyright: ignore[reportOperatorIssue]
             field_params["default"] = None
 
         fields[prop_name] = (field_type, Field(**field_params))
@@ -104,7 +109,7 @@ async def secret_validator(
     # (1) Check if the secret is defined
     async with SecretsService.with_session() as service:
         defined_secret = await service.search_secrets(
-            SecretSearch(names=[name], environment=environment)  # type: ignore
+            SecretSearch(names={name}, environment=environment)
         )
         logger.info("Secret search results", defined_secret=defined_secret)
         if (n_found := len(defined_secret)) != 1:

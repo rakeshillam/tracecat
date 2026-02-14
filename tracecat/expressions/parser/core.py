@@ -1,9 +1,9 @@
 from lark import Lark, Token, Tree
 from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedInput
 
+from tracecat.exceptions import TracecatExpressionError
 from tracecat.expressions.parser.grammar import grammar
 from tracecat.logger import logger
-from tracecat.types.exceptions import TracecatExpressionError
 
 
 class ExprParser:
@@ -21,7 +21,7 @@ class ExprParser:
             )
             if hasattr(e, "allowed"):
                 # Zero out the allowed attribute to hide allowed characters
-                e.allowed = None  # type: ignore
+                e.allowed = None  # pyright: ignore[reportAttributeAccessIssue]
             raise TracecatExpressionError(
                 f"Failed to parse expression: {e}", detail=str(e)
             ) from e

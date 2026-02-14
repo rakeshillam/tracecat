@@ -23,12 +23,15 @@ import type {
 } from "@/components/builder/canvas/canvas"
 import type { EventsSidebarRef } from "@/components/builder/events/events-sidebar"
 import type { ActionPanelRef } from "@/components/builder/panel/action-panel"
-import { pruneReactFlowInstance } from "@/lib/workflow"
+import {
+  DEFAULT_TRIGGER_PANEL_TAB,
+  type TriggerPanelTab,
+} from "@/components/builder/panel/trigger-panel-tabs"
 import { useWorkflow } from "@/providers/workflow"
 
 interface ReactFlowContextType {
   reactFlow: ReactFlowInstance
-  workflowId: string | null
+  workflowId: string
   workspaceId: string
   selectedNodeId: string | null
   getNode: (id: string) => Node | undefined
@@ -43,10 +46,15 @@ interface ReactFlowContextType {
   toggleSidebar: () => void
   toggleActionPanel: () => void
   expandSidebarAndFocusEvents: () => void
+  triggerPanelTab: TriggerPanelTab
+  setTriggerPanelTab: React.Dispatch<SetStateAction<TriggerPanelTab>>
   selectedActionEventRef?: string
   setSelectedActionEventRef: React.Dispatch<SetStateAction<string | undefined>>
   currentExecutionId: string | null
   setCurrentExecutionId: React.Dispatch<SetStateAction<string | null>>
+  actionDrafts: Record<string, unknown>
+  setActionDraft: (actionId: string, draft: unknown) => void
+  clearActionDraft: (actionId: string) => void
 }
 
 const ReactFlowInteractionsContext = createContext<
@@ -61,7 +69,7 @@ export const WorkflowBuilderProvider: React.FC<
   ReactFlowInteractionsProviderProps
 > = ({ children }) => {
   const reactFlowInstance = useReactFlow()
-  const { workspaceId, workflowId, error, updateWorkflow } = useWorkflow()
+  const { workspaceId, workflowId, error } = useWorkflow()
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedActionEventRef, setSelectedActionEventRef] = useState<
@@ -70,32 +78,57 @@ export const WorkflowBuilderProvider: React.FC<
   const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false)
   const [isActionPanelCollapsed, setIsActionPanelCollapsed] =
     React.useState(false)
+  const [triggerPanelTab, setTriggerPanelTab] = useState<TriggerPanelTab>(
+    DEFAULT_TRIGGER_PANEL_TAB
+  )
   const [currentExecutionId, setCurrentExecutionId] = useState<string | null>(
     null
   )
+  // In-memory map of actionId -> last edited form values.
+  // This lets the action panel restore unsaved edits when the user
+  // switches between nodes without touching the backend.
+  const [actionDrafts, setActionDrafts] = useState<Record<string, unknown>>({})
   const canvasRef = useRef<WorkflowCanvasRef>(null)
   const sidebarRef = useRef<EventsSidebarRef>(null)
   const actionPanelRef = useRef<ActionPanelRef>(null)
 
   useEffect(() => {
+    // When the user switches workflows, clear selection, execution state,
+    // and any in-memory drafts so we don't leak state across workflows.
     setSelectedNodeId(null)
     setCurrentExecutionId(null)
+    setActionDrafts({})
+    setTriggerPanelTab(DEFAULT_TRIGGER_PANEL_TAB)
   }, [workflowId])
 
   const setReactFlowNodes = useCallback(
     (nodes: Node[] | ((nodes: Node[]) => Node[])) => {
       reactFlowInstance.setNodes(nodes)
-      updateWorkflow({ object: pruneReactFlowInstance(reactFlowInstance) })
     },
-    [workflowId, reactFlowInstance]
+    [reactFlowInstance]
   )
   const setReactFlowEdges = useCallback(
     (edges: Edge[] | ((edges: Edge[]) => Edge[])) => {
       reactFlowInstance.setEdges(edges)
-      updateWorkflow({ object: pruneReactFlowInstance(reactFlowInstance) })
     },
-    [workflowId, reactFlowInstance]
+    [reactFlowInstance]
   )
+
+  const setActionDraft = useCallback((actionId: string, draft: unknown) => {
+    // Store or update the draft for a given actionId.
+    setActionDrafts((prev) => ({
+      ...prev,
+      [actionId]: draft,
+    }))
+  }, [])
+
+  const clearActionDraft = useCallback((actionId: string) => {
+    // Remove a single action's draft (typically after a successful save).
+    setActionDrafts((prev) => {
+      const { [actionId]: _removed, ...rest } = prev
+      return rest
+    })
+  }, [])
   useOnSelectionChange({
     onChange: ({ nodes }: { nodes: NodeType[] }) => {
       const nodeSelected = nodes[0]
@@ -147,7 +180,8 @@ export const WorkflowBuilderProvider: React.FC<
 
   const value = React.useMemo(
     () => ({
-      workflowId,
+      // safe: provider not rendered when !workflowId
+      workflowId: workflowId!,
       workspaceId,
       selectedNodeId,
       selectedActionEventRef,
@@ -162,11 +196,16 @@ export const WorkflowBuilderProvider: React.FC<
       isSidebarCollapsed,
       toggleSidebar,
       expandSidebarAndFocusEvents,
+      triggerPanelTab,
+      setTriggerPanelTab,
       actionPanelRef,
       isActionPanelCollapsed,
       toggleActionPanel,
       currentExecutionId,
       setCurrentExecutionId,
+      actionDrafts,
+      setActionDraft,
+      clearActionDraft,
     }),
     [
       workflowId,
@@ -183,11 +222,16 @@ export const WorkflowBuilderProvider: React.FC<
       isSidebarCollapsed,
       toggleSidebar,
       expandSidebarAndFocusEvents,
+      triggerPanelTab,
+      setTriggerPanelTab,
       actionPanelRef,
       isActionPanelCollapsed,
       toggleActionPanel,
       currentExecutionId,
       setCurrentExecutionId,
+      actionDrafts,
+      setActionDraft,
+      clearActionDraft,
     ]
   )
 

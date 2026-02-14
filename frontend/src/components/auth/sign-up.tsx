@@ -6,7 +6,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import TracecatIcon from "public/icon.png"
 import type React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { ApiError } from "@/client"
@@ -27,9 +27,9 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { useAuth, useAuthActions } from "@/hooks/use-auth"
 import type { RequestValidationError, TracecatApiError } from "@/lib/errors"
 import { cn } from "@/lib/utils"
-import { useAuth } from "@/providers/auth"
 
 // Move type definition outside the function for reuse
 type EmailLoginValidationError = {
@@ -53,12 +53,21 @@ function isEmailLoginValidationError(
   )
 }
 
-export function SignUp({ className }: React.HTMLProps<HTMLDivElement>) {
+interface SignUpProps extends React.HTMLProps<HTMLDivElement> {
+  returnUrl?: string | null
+}
+
+export function SignUp({ className, returnUrl }: SignUpProps) {
   const { user } = useAuth()
   const router = useRouter()
-  if (user) {
-    router.push("/workspaces")
-  }
+
+  useEffect(() => {
+    if (user) {
+      // Always redirect to /workspaces after login
+      // Invitation acceptance is handled atomically during registration
+      router.push("/workspaces")
+    }
+  }, [user, router])
 
   return (
     <div
@@ -77,11 +86,18 @@ export function SignUp({ className }: React.HTMLProps<HTMLDivElement>) {
         </CardHeader>
         <CardContent>
           <div className="grid gap-4">
-            <BasicRegistrationForm />
+            <BasicRegistrationForm returnUrl={returnUrl} />
           </div>
           <div className="mt-4 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
-            <Link href="/sign-in" className="underline">
+            <Link
+              href={
+                returnUrl
+                  ? `/sign-in?returnUrl=${encodeURIComponent(returnUrl)}`
+                  : "/sign-in"
+              }
+              className="underline"
+            >
               Sign in
             </Link>
           </div>
@@ -99,9 +115,32 @@ const basicRegistrationSchema = z.object({
 })
 type BasicLoginForm = z.infer<typeof basicRegistrationSchema>
 
-export function BasicRegistrationForm() {
+interface BasicRegistrationFormProps {
+  returnUrl?: string | null
+}
+
+/**
+ * Extract invitation token from a returnUrl if it's an invitation accept URL.
+ */
+function extractInvitationToken(returnUrl: string | null): string | null {
+  if (!returnUrl) return null
+  try {
+    // returnUrl might be like "/invitations/accept?token=abc123"
+    const url = new URL(returnUrl, window.location.origin)
+    if (url.pathname === "/invitations/accept") {
+      return url.searchParams.get("token")
+    }
+  } catch {
+    // Invalid URL, ignore
+  }
+  return null
+}
+
+export function BasicRegistrationForm({
+  returnUrl,
+}: BasicRegistrationFormProps) {
   const [isLoading, setIsLoading] = useState(false)
-  const { register, login } = useAuth()
+  const { register, login } = useAuthActions()
   const form = useForm<BasicLoginForm>({
     resolver: zodResolver(basicRegistrationSchema),
     defaultValues: {
@@ -111,9 +150,13 @@ export function BasicRegistrationForm() {
   })
 
   const onSubmit = async (values: BasicLoginForm) => {
-    console.log(values)
     try {
       setIsLoading(true)
+
+      // Extract invitation token to pass during registration
+      // This enables atomic invitation acceptance during registration
+      const invitationToken = extractInvitationToken(returnUrl ?? null)
+
       /**
        * XXX(auth): The user cannot set is_active or is_superuser itself at registration.
        * Only a superuser can do it by PATCHing the user.
@@ -122,8 +165,10 @@ export function BasicRegistrationForm() {
         requestBody: {
           email: values.email,
           password: values.password,
+          ...(invitationToken && { invitation_token: invitationToken }),
         },
       })
+
       // On successful registration, log the user in
       await login({
         formData: {
@@ -131,9 +176,9 @@ export function BasicRegistrationForm() {
           password: values.password,
         },
       })
+      // Redirect is handled by the useEffect in SignUp component
     } catch (error) {
       if (error instanceof ApiError) {
-        console.log("ApiError registering user", error)
         const apiError = error as TracecatApiError
 
         // Handle both string and object error details
@@ -172,7 +217,6 @@ export function BasicRegistrationForm() {
             }
           } else {
             // Handle RequestValidationError case
-            console.log("Validation error", detail)
             form.setError("email", {
               message: detail[0].msg || "Unknown error",
             })
@@ -232,7 +276,7 @@ export function BasicRegistrationForm() {
             {isLoading && (
               <Icons.spinner className="mr-2 size-4 animate-spin" />
             )}
-            Create Account
+            Create account
           </Button>
         </div>
       </form>

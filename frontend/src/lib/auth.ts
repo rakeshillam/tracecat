@@ -1,7 +1,9 @@
-import { AxiosError } from "axios"
-import type { UserRead, UserRole, WorkspaceMembershipRead } from "@/client"
-
-import { client } from "@/lib/api"
+import {
+  ApiError,
+  type UserRead,
+  usersUsersCurrentUser,
+  type WorkspaceMembershipRead,
+} from "@/client"
 
 export const SYSTEM_USER_READ: UserRead = {
   id: "system",
@@ -14,10 +16,9 @@ export const SYSTEM_USER_READ: UserRead = {
 
 export async function getCurrentUser(): Promise<UserRead | null> {
   try {
-    const response = await client.get("/users/me")
-    return response.data as UserRead
+    return await usersUsersCurrentUser()
   } catch (error) {
-    if (error instanceof AxiosError) {
+    if (error instanceof ApiError) {
       // Backend throws 401 unauthorized if the user is not logged in
       console.log("User is not logged in")
       return null
@@ -35,10 +36,17 @@ export function userIsPrivileged(
   if (!user) {
     return false
   }
-  return userIsOrgAdmin(user) || membership?.role === "admin"
+  return userIsPlatformAdmin(user) || membership?.role === "admin"
 }
 
-export function userIsOrgAdmin(user?: UserRead | null): boolean {
+/**
+ * Check if user has platform-level admin privileges.
+ *
+ * This checks the platform role (superuser or role=admin), NOT the
+ * organization membership role. For org-level admin checks, use
+ * the useOrgMembership hook's canAdministerOrg.
+ */
+export function userIsPlatformAdmin(user?: UserRead | null): boolean {
   return user?.is_superuser || user?.role === "admin"
 }
 
@@ -54,6 +62,9 @@ export function getDisplayName(
   }
 }
 
+/**
+ * User class that wraps UserRead data for authorization checks.
+ */
 export class User {
   constructor(private user: UserRead) {}
 
@@ -65,10 +76,6 @@ export class User {
     return this.user.email
   }
 
-  get role(): UserRole {
-    return this.user.role
-  }
-
   get firstName(): string | null | undefined {
     return this.user.first_name
   }
@@ -78,19 +85,19 @@ export class User {
   }
 
   get settings(): Record<string, unknown> {
-    return this.user.settings
+    return this.user.settings ?? {}
   }
 
   get isSuperuser(): boolean {
-    return this.user.is_superuser || false
+    return this.user.is_superuser ?? false
   }
 
   get isActive(): boolean {
-    return this.user.is_active || false
+    return this.user.is_active ?? false
   }
 
   get isVerified(): boolean {
-    return this.user.is_verified || false
+    return this.user.is_verified ?? false
   }
 
   get unwrap(): UserRead {
@@ -105,10 +112,14 @@ export class User {
   }
 
   /**
-   * Returns true if the user is an organization admin.
+   * Returns true if the user has platform-level admin privileges.
+   *
+   * This checks the platform role (superuser or role=admin), NOT the
+   * organization membership role. For org-level admin checks, use
+   * the useOrgMembership hook's canAdministerOrg.
    */
-  isOrgAdmin(): boolean {
-    return userIsOrgAdmin(this.user)
+  isPlatformAdmin(): boolean {
+    return userIsPlatformAdmin(this.user)
   }
 
   /**

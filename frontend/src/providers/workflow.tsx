@@ -6,7 +6,6 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { AlertTriangleIcon } from "lucide-react"
 import type React from "react"
 import {
   createContext,
@@ -19,10 +18,12 @@ import {
   type ApiError,
   type ValidationResult,
   type WorkflowCommitResponse,
+  type WorkflowDslPublish,
   type WorkflowRead,
   type WorkflowUpdate,
   workflowsCommitWorkflow,
   workflowsGetWorkflow,
+  workflowsPublishWorkflow,
   workflowsUpdateWorkflow,
 } from "@/client"
 import { toast } from "@/components/ui/use-toast"
@@ -40,6 +41,7 @@ type WorkflowContextType = {
     void,
     unknown
   >
+  publishWorkflow: MutateFunction<void, ApiError, WorkflowDslPublish, unknown>
   updateWorkflow: MutateFunction<void, ApiError, WorkflowUpdate, unknown>
   validationErrors: ValidationResult[] | null
   setValidationErrors: React.Dispatch<SetStateAction<ValidationResult[] | null>>
@@ -102,21 +104,10 @@ export function WorkflowProvider({
           description: "New workflow version saved successfully.",
         })
       } else {
-        const description = (
-          <div className="flex flex-col space-y-2">
-            <div className="flex items-center space-x-2">
-              <AlertTriangleIcon className="size-4 fill-red-500 stroke-white" />
-              <p className="font-semibold">
-                {response.message ||
-                  "Could not save workflow due to validation errors."}
-              </p>
-            </div>
-            <p>Please hover over the save button to view errors.</p>
-          </div>
-        )
+        const errorCount = response.errors?.length ?? 1
         toast({
-          title: "Workflow validation failed",
-          description,
+          title: `Workflow validation failed with ${errorCount} ${errorCount === 1 ? "error" : "errors"}`,
+          description: "Please hover over the save button to view errors.",
         })
       }
     },
@@ -129,6 +120,74 @@ export function WorkflowProvider({
           "Could not save workflow. Please try again.",
         variant: "destructive",
       })
+    },
+  })
+
+  const { mutateAsync: publishWorkflow } = useMutation({
+    mutationFn: async (params: WorkflowDslPublish) =>
+      await workflowsPublishWorkflow({
+        workspaceId,
+        workflowId,
+        requestBody: params,
+      }),
+    onSuccess: () => {
+      toast({
+        title: "Workflow published successfully",
+        description:
+          "Workflow has been published to the configured repository.",
+      })
+    },
+    onError: (error: ApiError) => {
+      console.warn("Failed to publish workflow:", error)
+      const apiError = error as TracecatApiError<string>
+      const detail = apiError.body?.detail
+      switch (apiError.status) {
+        case 400:
+          toast({
+            title: "Failed to publish workflow",
+            description:
+              detail ||
+              "Invalid workflow configuration. Please check the logs for more details.",
+          })
+          break
+        case 403:
+          toast({
+            title: "Failed to publish workflow",
+            description:
+              detail || "You don't have permission to publish this workflow.",
+          })
+          break
+        case 404:
+          toast({
+            title: "Workflow definition not found",
+            description:
+              detail || "Please save the workflow before publishing.",
+          })
+          break
+        case 409:
+          toast({
+            title: "Failed to publish workflow",
+            description:
+              detail ||
+              "There was a conflict publishing the workflow. Please try again.",
+          })
+          break
+        case 422:
+          toast({
+            title: "Failed to publish workflow",
+            description:
+              detail ||
+              "Workflow validation failed. Please check your configuration.",
+          })
+          break
+        default:
+          toast({
+            title: "Failed to publish workflow",
+            description:
+              detail || "Could not publish workflow. Please try again.",
+            variant: "destructive",
+          })
+      }
     },
   })
 
@@ -173,6 +232,7 @@ export function WorkflowProvider({
         isLoading,
         error,
         commitWorkflow,
+        publishWorkflow,
         updateWorkflow,
         validationErrors,
         setValidationErrors,

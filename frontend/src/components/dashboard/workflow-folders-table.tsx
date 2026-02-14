@@ -4,24 +4,19 @@ import { DotsHorizontalIcon } from "@radix-ui/react-icons"
 import type { Row } from "@tanstack/react-table"
 import { format, formatDistanceToNow } from "date-fns"
 import { CircleDot, FolderIcon, WorkflowIcon } from "lucide-react"
-import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import React, { useState } from "react"
+import { useState } from "react"
 import type {
   ApiError,
   FolderDirectoryItem,
   TagRead,
   WorkflowReadMinimal,
 } from "@/client"
-import { CreateWorkflowButton } from "@/components/dashboard/create-workflow-button"
 import { DeleteWorkflowAlertDialog } from "@/components/dashboard/delete-workflow-dialog"
 import { FolderDeleteAlertDialog } from "@/components/dashboard/folder-delete-dialog"
 import { FolderMoveDialog } from "@/components/dashboard/folder-move-dialog"
 import { FolderRenameDialog } from "@/components/dashboard/folder-rename-dialog"
-import {
-  FolderViewToggle,
-  type ViewMode,
-} from "@/components/dashboard/folder-view-toggle"
+import type { ViewMode } from "@/components/dashboard/folder-view-toggle"
 import {
   FolderActions,
   WorkflowActions,
@@ -33,14 +28,8 @@ import {
   DataTableColumnHeader,
   type DataTableToolbarProps,
 } from "@/components/data-table"
+import { TagBadge } from "@/components/tag-badge"
 import { Badge } from "@/components/ui/badge"
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -53,21 +42,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useAuth } from "@/hooks/use-auth"
 import { type DirectoryItem, useGetDirectoryItems } from "@/lib/hooks"
-import { capitalizeFirst, cn } from "@/lib/utils"
-import { useAuth } from "@/providers/auth"
-import { useWorkspace } from "@/providers/workspace"
+import { capitalizeFirst } from "@/lib/utils"
+import { useWorkspaceId } from "@/providers/workspace-id"
 
-export function WorkflowFoldersTable({
-  view,
-  setView,
-}: {
-  view: ViewMode
-  setView: (view: ViewMode) => void
-}) {
-  const { workspaceId } = useWorkspace()
-  const path = useSearchParams().get("path") || "/"
-  const segments = path.split("/").filter(Boolean)
+export function WorkflowFoldersTable({ view }: { view: ViewMode }) {
+  const workspaceId = useWorkspaceId()
+  const searchParams = useSearchParams()
+  const path = searchParams?.get("path") || "/"
+  const _segments = path.split("/").filter(Boolean)
 
   // We should read the structure directly from the backend
   // i.e. the backend should return us the
@@ -75,87 +59,12 @@ export function WorkflowFoldersTable({
     useGetDirectoryItems(path, workspaceId)
 
   return (
-    <div className="flex flex-col space-y-12">
-      <div className="flex w-full">
-        <div className="items-start space-y-3 text-left">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                <BreadcrumbLink
-                  asChild
-                  className={cn(
-                    "flex items-center",
-                    segments.length > 0
-                      ? "text-muted-foreground"
-                      : "text-foreground"
-                  )}
-                >
-                  <Link href={`/workspaces/${workspaceId}/workflows`}>
-                    <h2 className="text-2xl font-semibold tracking-tight">
-                      Workflows
-                    </h2>
-                  </Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              {/* Show folder path in breadcrumb */}
-              {segments.length > 0 &&
-                segments.map((segment, index) => {
-                  // Build the path up to this segment
-                  const pathToSegment = `/${segments.slice(0, index + 1).join("/")}`
-                  const url = `/workspaces/${workspaceId}/workflows?path=${encodeURIComponent(pathToSegment)}`
-
-                  return (
-                    <React.Fragment key={index}>
-                      <BreadcrumbSeparator className="text-xl">
-                        {"/"}
-                      </BreadcrumbSeparator>
-                      <BreadcrumbItem>
-                        <BreadcrumbLink
-                          asChild
-                          className={cn(
-                            "flex items-center",
-                            index === segments.length - 1
-                              ? "text-foreground/80"
-                              : "text-muted-foreground"
-                          )}
-                        >
-                          {index === segments.length - 1 ? (
-                            <h2 className="text-2xl font-semibold tracking-tight">
-                              {segment}
-                            </h2>
-                          ) : (
-                            <Link href={url}>
-                              <h2 className="text-2xl font-semibold tracking-tight">
-                                {segment}
-                              </h2>
-                            </Link>
-                          )}
-                        </BreadcrumbLink>
-                      </BreadcrumbItem>
-                    </React.Fragment>
-                  )
-                })}
-            </BreadcrumbList>
-          </Breadcrumb>
-          <p className="text-md text-muted-foreground">
-            Welcome back! Here are your workflows.
-          </p>
-        </div>
-        <div className="ml-auto flex items-center space-x-4">
-          <FolderViewToggle
-            defaultView={view}
-            onViewChange={(view) => setView(view)}
-          />
-          <CreateWorkflowButton view="folders" currentFolderPath={path} />
-        </div>
-      </div>
-      <WorkflowsDashboardTable
-        view={view}
-        directoryItems={directoryItems}
-        directoryItemsIsLoading={directoryItemsIsLoading}
-        directoryItemsError={directoryItemsError}
-      />
-    </div>
+    <WorkflowsDashboardTable
+      view={view}
+      directoryItems={directoryItems}
+      directoryItemsIsLoading={directoryItemsIsLoading}
+      directoryItemsError={directoryItemsError}
+    />
   )
 }
 
@@ -171,7 +80,7 @@ export function WorkflowsDashboardTable({
   directoryItemsError: ApiError | null
 }) {
   const router = useRouter()
-  const { workspaceId } = useWorkspace()
+  const workspaceId = useWorkspaceId()
   const { user } = useAuth()
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null)
   const [selectedWorkflow, setSelectedWorkflow] =
@@ -208,6 +117,13 @@ export function WorkflowsDashboardTable({
           emptyMessage="No workflows found."
           errorMessage="Error loading workflows."
           onClickRow={handleOnClickRow}
+          getRowHref={(row) => {
+            const item = row.original
+            if (item.type === "workflow") {
+              return `/workspaces/${workspaceId}/workflows/${item.id}`
+            }
+            return undefined
+          }}
           columns={[
             {
               accessorKey: "type",
@@ -305,53 +221,6 @@ export function WorkflowsDashboardTable({
               enableHiding: false,
             },
             {
-              id: "Last Edited",
-              accessorKey: "updated_at",
-              header: ({ column }) => (
-                <DataTableColumnHeader
-                  className="text-xs"
-                  column={column}
-                  title="Last Edited"
-                />
-              ),
-              cell: ({ getValue, row }) => {
-                if (row.original.type === "folder") {
-                  return (
-                    <span className="text-xs text-muted-foreground/70">
-                      {NO_DATA}
-                    </span>
-                  )
-                }
-                const updatedAt = getValue<string | undefined>()
-                if (!updatedAt) {
-                  return (
-                    <span className="text-xs text-muted-foreground/70">
-                      No last edited
-                    </span>
-                  )
-                }
-                const updatedAtDate = new Date(updatedAt)
-                return (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="text-xs text-muted-foreground">
-                        {capitalizeFirst(
-                          formatDistanceToNow(updatedAtDate, {
-                            addSuffix: true,
-                          })
-                        )}
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {format(updatedAtDate, "PPpp")}
-                    </TooltipContent>
-                  </Tooltip>
-                )
-              },
-              enableSorting: true,
-              enableHiding: false,
-            },
-            {
               id: "Created",
               accessorKey: "created_at",
               header: ({ column }) => (
@@ -386,7 +255,54 @@ export function WorkflowsDashboardTable({
               enableSorting: true,
             },
             {
-              id: "Last Saved",
+              id: "Updated",
+              accessorKey: "updated_at",
+              header: ({ column }) => (
+                <DataTableColumnHeader
+                  className="text-xs"
+                  column={column}
+                  title="Updated"
+                />
+              ),
+              cell: ({ getValue, row }) => {
+                if (row.original.type === "folder") {
+                  return (
+                    <span className="text-xs text-muted-foreground/70">
+                      {NO_DATA}
+                    </span>
+                  )
+                }
+                const updatedAt = getValue<string | undefined>()
+                if (!updatedAt) {
+                  return (
+                    <span className="text-xs text-muted-foreground/70">
+                      No updated
+                    </span>
+                  )
+                }
+                const updatedAtDate = new Date(updatedAt)
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="text-xs text-muted-foreground">
+                        {capitalizeFirst(
+                          formatDistanceToNow(updatedAtDate, {
+                            addSuffix: true,
+                          })
+                        )}
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {format(updatedAtDate, "PPpp")}
+                    </TooltipContent>
+                  </Tooltip>
+                )
+              },
+              enableSorting: true,
+              enableHiding: false,
+            },
+            {
+              id: "Last published",
               accessorFn: (row: DirectoryItem) =>
                 row.type === "workflow"
                   ? row.latest_definition?.created_at
@@ -395,7 +311,7 @@ export function WorkflowsDashboardTable({
                 <DataTableColumnHeader
                   className="text-xs"
                   column={column}
-                  title="Last Saved"
+                  title="Last published"
                 />
               ),
               cell: ({ getValue, row }) => {
@@ -508,14 +424,7 @@ export function WorkflowsDashboardTable({
               enableHiding: true,
             },
             {
-              id: "Actions",
-              header: ({ column }) => (
-                <DataTableColumnHeader
-                  className="text-xs"
-                  column={column}
-                  title="Actions"
-                />
-              ),
+              id: "actions",
               cell: ({ row }) => {
                 return (
                   <DropdownMenu>
@@ -587,20 +496,4 @@ const defaultToolbarProps: DataTableToolbarProps<DirectoryItem> = {
     placeholder: "Search workflows...",
     column: "name",
   },
-}
-
-export function TagBadge({ tag }: { tag: TagRead }) {
-  return (
-    <Badge
-      key={tag.id}
-      variant="secondary"
-      className="text-xs"
-      style={{
-        backgroundColor: tag.color || undefined,
-        color: tag.color ? "white" : undefined,
-      }}
-    >
-      {tag.name}
-    </Badge>
-  )
 }

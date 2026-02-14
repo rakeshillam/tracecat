@@ -20,7 +20,7 @@ def id_to_short(id: UUID, prefix: str) -> str:
     Returns:
         str: Prefixed base62 encoded string, padded to 22 characters
     """
-    suffix = base62.b62encode(id.int)
+    suffix = base62.b62encode(cast(int, id.int))
     # Pad to 22 characters which is the maximum length needed for a UUID
     padded_suffix = suffix.zfill(22)
     return f"{prefix}{padded_suffix}"
@@ -69,6 +69,9 @@ class TracecatUUID[ShortID: str](UUID):
             raise ValueError(f"{self.__class__.__name__} requires a prefix to be set")
         super().__init__(*args, **kwargs)
 
+    def __repr__(self) -> str:
+        return self.short()
+
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
@@ -97,7 +100,7 @@ class TracecatUUID[ShortID: str](UUID):
         Returns:
             ShortIDType: The shortened ID string with prefix
         """
-        return id_to_short(self, self.prefix)  # type: ignore
+        return cast(ShortID, id_to_short(self, self.prefix))
 
     @classmethod
     def from_short(cls, short_id: ShortID) -> Self:
@@ -157,7 +160,7 @@ class TracecatUUID[ShortID: str](UUID):
         if cls.legacy_prefix is None:
             raise ValueError(f"Legacy IDs are not supported for {cls.__name__}")
         prefix_len = len(cls.legacy_prefix)
-        hex_str = id[prefix_len - 1 :]
+        hex_str = id[prefix_len:]
         return cls.from_uuid(UUID(hex_str))
 
     def to_legacy(self) -> str:

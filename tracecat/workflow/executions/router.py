@@ -2,26 +2,34 @@ from typing import Any
 
 import temporalio.service
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
-from sqlmodel import col, select
-from sqlmodel.ext.asyncio.session import AsyncSession
-from tracecat_registry.integrations.agents.builder import AgentOutput
+from sqlalchemy.ext.asyncio import AsyncSession
 
+import tracecat.agent.adapter.vercel
+from tracecat.agent.schemas import AgentOutput
+from tracecat.agent.types import ClaudeSDKMessageTA
 from tracecat.auth.dependencies import WorkspaceUserRole
 from tracecat.auth.enums import SpecialUserID
 from tracecat.db.dependencies import AsyncDBSession
-from tracecat.db.schemas import WorkflowDefinition
-from tracecat.dsl.common import DSLInput, get_trigger_type_from_search_attr
-from tracecat.ee.interactions.models import InteractionRead
+from tracecat.db.models import WorkflowDefinition
+from tracecat.dsl.common import (
+    DSLInput,
+    get_execution_type_from_search_attr,
+    get_trigger_type_from_search_attr,
+)
+from tracecat.ee.interactions.schemas import InteractionRead
 from tracecat.ee.interactions.service import InteractionService
+from tracecat.exceptions import TracecatValidationError
 from tracecat.identifiers import UserID
 from tracecat.identifiers.workflow import OptionalAnyWorkflowIDQuery, WorkflowUUID
 from tracecat.logger import logger
+from tracecat.registry.lock.types import RegistryLock
 from tracecat.settings.service import get_setting
-from tracecat.types.exceptions import TracecatValidationError
 from tracecat.workflow.executions.dependencies import UnquotedExecutionID
 from tracecat.workflow.executions.enums import TriggerType
-from tracecat.workflow.executions.models import (
+from tracecat.workflow.executions.schemas import (
     WorkflowExecutionCreate,
     WorkflowExecutionCreateResponse,
     WorkflowExecutionRead,
@@ -30,6 +38,7 @@ from tracecat.workflow.executions.models import (
     WorkflowExecutionTerminate,
 )
 from tracecat.workflow.executions.service import WorkflowExecutionsService
+from tracecat.workflow.management.management import WorkflowsManagementService
 
 router = APIRouter(prefix="/workflow-executions", tags=["workflow-executions"])
 
@@ -109,7 +118,7 @@ async def get_workflow_execution(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Workflow execution not found",
         )
-    logger.info("Getting workflow execution events", execution_id=execution.id)
+    logger.debug("Getting workflow execution events", execution_id=execution.id)
     events = await service.list_workflow_execution_events(execution.id)
     interactions = await _list_interactions(session, execution.id)
     return WorkflowExecutionRead(
@@ -127,15 +136,18 @@ async def get_workflow_execution(
         trigger_type=get_trigger_type_from_search_attr(
             execution.typed_search_attributes, execution.id
         ),
+        execution_type=get_execution_type_from_search_attr(
+            execution.typed_search_attributes
+        ),
     )
 
 
-@router.get("/{execution_id}/compact")
+@router.get("/{execution_id:path}/compact")
 async def get_workflow_execution_compact(
     role: WorkspaceUserRole,
     execution_id: UnquotedExecutionID,
     session: AsyncDBSession,
-) -> WorkflowExecutionReadCompact[Any, AgentOutput | Any]:
+) -> WorkflowExecutionReadCompact[Any, AgentOutput | Any, Any]:
     """Get a workflow execution."""
     service = await WorkflowExecutionsService.connect(role=role)
     execution = await service.get_execution(execution_id)
@@ -146,6 +158,35 @@ async def get_workflow_execution_compact(
         )
 
     compact_events = await service.list_workflow_execution_events_compact(execution_id)
+
+    for event in compact_events:
+        # Project AgentOutput to UIMessages only in the compact workflow execution view
+        if event.session is not None and event.action_result is not None:
+            logger.trace("Transforming AgentOutput to UIMessages")
+            try:
+                # Successful validation asserts this is an AgentOutput
+                output = AgentOutput.model_validate(event.action_result)
+                if output.message_history:
+                    # Re-deserialize the message field for each ChatMessage.
+                    # When data round-trips through Temporal, ChatMessage.message
+                    # becomes a raw dict instead of a typed ClaudeSDKMessage.
+                    # We need to re-validate it so convert_chat_messages_to_ui
+                    # can use isinstance() checks on the message types.
+                    for chat_msg in output.message_history:
+                        if chat_msg.message is not None and isinstance(
+                            chat_msg.message, dict
+                        ):
+                            chat_msg.message = ClaudeSDKMessageTA.validate_python(
+                                chat_msg.message
+                            )
+                    event.session.events = (
+                        tracecat.agent.adapter.vercel.convert_chat_messages_to_ui(
+                            output.message_history
+                        )
+                    )
+            except Exception as e:
+                logger.error("Error transforming AgentOutput to UIMessages", error=e)
+
     interactions = await _list_interactions(session, execution_id)
     return WorkflowExecutionReadCompact(
         id=execution.id,
@@ -163,6 +204,9 @@ async def get_workflow_execution_compact(
         trigger_type=get_trigger_type_from_search_attr(
             execution.typed_search_attributes, execution.id
         ),
+        execution_type=get_execution_type_from_search_attr(
+            execution.typed_search_attributes
+        ),
     )
 
 
@@ -177,12 +221,12 @@ async def create_workflow_execution(
     # Get the dslinput from the workflow definition
     wf_id = WorkflowUUID.new(params.workflow_id)
     try:
-        result = await session.exec(
+        result = await session.execute(
             select(WorkflowDefinition)
             .where(WorkflowDefinition.workflow_id == wf_id)
-            .order_by(col(WorkflowDefinition.version).desc())
+            .order_by(WorkflowDefinition.version.desc())
         )
-        defn = result.first()
+        defn = result.scalars().first()
         if not defn:
             raise NoResultFound("No workflow definition found for workflow ID")
     except NoResultFound as e:
@@ -194,7 +238,79 @@ async def create_workflow_execution(
     dsl_input = DSLInput(**defn.content)
     try:
         response = service.create_workflow_execution_nowait(
-            dsl=dsl_input, wf_id=wf_id, payload=params.inputs
+            dsl=dsl_input,
+            wf_id=wf_id,
+            payload=params.inputs,
+            time_anchor=params.time_anchor,
+            # For regular workflow executions, use the registry lock from the workflow definition
+            registry_lock=(
+                RegistryLock.model_validate(defn.registry_lock)
+                if defn.registry_lock
+                else None
+            ),
+        )
+        return response
+    except TracecatValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "type": "TracecatValidationError",
+                "message": str(e),
+                "detail": e.detail,
+            },
+        ) from e
+
+
+@router.post("/draft")
+async def create_draft_workflow_execution(
+    role: WorkspaceUserRole,
+    params: WorkflowExecutionCreate,
+    session: AsyncDBSession,
+) -> WorkflowExecutionCreateResponse:
+    """Create and schedule a draft workflow execution.
+
+    Draft executions run the current draft workflow graph (not the committed definition).
+    Child workflows using aliases will resolve to the latest draft aliases, not committed aliases.
+    """
+
+    service = await WorkflowExecutionsService.connect(role=role)
+    wf_id = WorkflowUUID.new(params.workflow_id)
+
+    # Build DSL from the draft workflow, not from committed definition
+    async with WorkflowsManagementService.with_session(role=role) as mgmt_service:
+        workflow = await mgmt_service.get_workflow(wf_id)
+        if not workflow:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
+            )
+        try:
+            dsl_input = await mgmt_service.build_dsl_from_workflow(workflow)
+        except TracecatValidationError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "type": "TracecatValidationError",
+                    "message": str(e),
+                    "detail": e.detail,
+                },
+            ) from e
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "type": "ValidationError",
+                    "message": str(e),
+                    "detail": e.errors(),
+                },
+            ) from e
+
+    try:
+        response = service.create_draft_workflow_execution_nowait(
+            dsl=dsl_input,
+            wf_id=wf_id,
+            payload=params.inputs,
+            time_anchor=params.time_anchor,
+            # For draft workflow executions, pass None to dynamically resolve the registry lock
         )
         return response
     except TracecatValidationError as e:

@@ -63,7 +63,7 @@ echo -e "${YELLOW}Generating new service key and signing secret...${NC}"
 
 service_key=$(openssl rand -hex 32)
 signing_secret=$(openssl rand -hex 32)
-
+user_auth_secret=$(openssl rand -hex 32)
 
 echo -e "${YELLOW}Generating a Fernet encryption key for the database...${NC}"
 
@@ -77,7 +77,7 @@ cp .env.example .env
 dotenv_replace "TRACECAT__SERVICE_KEY" "$service_key" "$env_file"
 dotenv_replace "TRACECAT__SIGNING_SECRET" "$signing_secret" "$env_file"
 dotenv_replace "TRACECAT__DB_ENCRYPTION_KEY" "$db_fernet_key" "$env_file"
-
+dotenv_replace "USER_AUTH_SECRET" "$user_auth_secret" "$env_file"
 
 # Prompt user for environment mode
 while true; do
@@ -108,6 +108,31 @@ while true; do
     fi
     echo -e "${RED}Cannot use 0.0.0.0 as address.\nSee https://docs.tracecat.com/self-hosting/deployment-options/docker-compose#download-configuration-files ${NC}"
 done
+
+# Extract hostname and port from the input
+# Handle formats like: localhost, localhost:8080, 127.0.0.1:8080
+if [[ "$new_ip" =~ ^([^:]+)(:([0-9]+))?$ ]]; then
+    hostname="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[3]}"
+
+    # If port is specified, update PUBLIC_APP_PORT
+    if [ -n "$port" ]; then
+        app_port="$port"
+        base_url="http://${hostname}:${port}"
+    else
+        # No port specified, use default port 80 (or keep existing PUBLIC_APP_PORT)
+        app_port=""
+        base_url="http://${hostname}"
+    fi
+else
+    # Fallback if regex doesn't match
+    hostname="$new_ip"
+    app_port=""
+    base_url="http://${hostname}"
+fi
+
+public_app_url="$base_url"
+public_api_url="${base_url}/api"
 
 
 # Prompt user for PostgreSQL SSL mode
@@ -147,8 +172,12 @@ done
 dotenv_replace "TRACECAT__APP_ENV" "$env_mode" "$env_file"
 dotenv_replace "NODE_ENV" "$env_mode" "$env_file"
 dotenv_replace "NEXT_PUBLIC_APP_ENV" "$env_mode" "$env_file"
-dotenv_replace "PUBLIC_API_URL" "http://${new_ip}/api/" "$env_file"
-dotenv_replace "PUBLIC_APP_URL" "http://${new_ip}" "$env_file"
+dotenv_replace "PUBLIC_API_URL" "$public_api_url" "$env_file"
+dotenv_replace "PUBLIC_APP_URL" "$public_app_url" "$env_file"
+# Update PUBLIC_APP_PORT if port was specified
+if [ -n "$app_port" ]; then
+    dotenv_replace "PUBLIC_APP_PORT" "$app_port" "$env_file"
+fi
 dotenv_replace "TRACECAT__DB_SSLMODE" "$ssl_mode" "$env_file"
 dotenv_replace "TRACECAT__AUTH_SUPERADMIN_EMAIL" "$superadmin_email" "$env_file"
 

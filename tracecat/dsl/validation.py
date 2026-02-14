@@ -1,63 +1,90 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from collections.abc import Callable, Sequence
+from datetime import datetime
+
+from pydantic import BaseModel
 from temporalio import activity
 
-from tracecat.dsl.common import DSLInput
-from tracecat.dsl.models import TriggerInputs
-from tracecat.expressions.expectations import ExpectedField, create_expectation_model
-from tracecat.logger import logger
-from tracecat.validation.models import DSLValidationResult, ValidationDetail
+from tracecat.dsl.schemas import TriggerInputs
+from tracecat.expressions.expectations import (
+    ExpectedField,
+    create_expectation_model,
+)
+from tracecat.validation.schemas import ValidationDetail
+from tracecat.workflow.executions.enums import TriggerType
 
 
-def validate_trigger_inputs(
-    dsl: DSLInput,
-    payload: TriggerInputs | None = None,
+def normalize_trigger_inputs(
+    input_schema: dict[str, ExpectedField],
+    payload: TriggerInputs,
     *,
-    raise_exceptions: bool = False,
-    model_name: str = "TriggerInputsValidator",
-) -> DSLValidationResult:
-    if not dsl.entrypoint.expects:
-        # If there's no expected trigger input schema, we don't validate it
-        # as its ignored anyways
-        return DSLValidationResult(
-            status="success", msg="No trigger input schema, skipping validation."
-        )
-    logger.trace(
-        "DSL entrypoint expects", expects=dsl.entrypoint.expects, payload=payload
-    )
+    model_name: str = "TriggerInputsNormalizer",
+) -> TriggerInputs:
+    """Apply defaults from the DSL `entrypoint.expects` to trigger inputs.
+
+    Returns a new dict with defaults filled where not provided.
+    If no expects schema is present, returns the original payload or `{}`.
+    """
+    # If there's no expects schema or the payload is not a dict, return the original payload
+    if not isinstance(payload, dict) or not input_schema:
+        return payload
 
     expects_schema = {
         field_name: ExpectedField.model_validate(field_schema)
-        for field_name, field_schema in dsl.entrypoint.expects.items()
+        for field_name, field_schema in input_schema.items()
     }
-    if isinstance(payload, dict):
-        # NOTE: We only validate dict payloads for now
-        validator = create_expectation_model(expects_schema, model_name=model_name)
-        try:
-            validator(**payload)
-        except ValidationError as e:
-            if raise_exceptions:
-                raise
-            return DSLValidationResult(
-                status="error",
-                msg=f"Validation error in trigger inputs ({e.title}). Please refer to the schema for more details.",
-                detail=ValidationDetail.list_from_pydantic(e),
-            )
-    return DSLValidationResult(status="success", msg="Trigger inputs are valid.")
+    # Build a pydantic model from schema and dump with defaults applied
+    validator = create_expectation_model(expects_schema, model_name=model_name)
+    model = validator(**payload)
+    return model.model_dump(mode="json")
 
 
-class ValidateTriggerInputsActivityInputs(BaseModel):
-    model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True)
-    dsl: DSLInput
-    trigger_inputs: TriggerInputs
+def format_input_schema_validation_error(details: list[ValidationDetail]) -> str:
+    lines = ["Failed to validate trigger inputs:\n"]
+    for i, d in enumerate(details):
+        loc = d.loc or ["<root>"]
+        if handler := PYDANTIC_ERR_TYPE_HANDLER.get(d.type):
+            message = handler(loc)
+        else:
+            message = f"The attribute '{'.'.join(str(s) for s in loc)}' does not match the input schema:\n{d.msg}.\n({d.type})"
+        lines.append(f"{i + 1}. {message}")
+    return "\n".join(lines)
+
+
+PYDANTIC_ERR_TYPE_HANDLER: dict[str, Callable[[Sequence[int | str]], str]] = {
+    "pydantic.extra_forbidden": lambda loc: (
+        f"The attribute '{'.'.join(str(s) for s in loc)}' is not allowed in the input schema."
+    ),
+    "pydantic.missing": lambda loc: (
+        f"Missing required field(s): '{'.'.join(str(s) for s in loc)}'."
+    ),
+    "pydantic.invalid_type": lambda loc: (
+        f"Invalid type at '{'.'.join(str(s) for s in loc)}'."
+    ),
+}
+
+
+class ResolveTimeAnchorActivityInputs(BaseModel):
+    """Inputs for resolving the workflow time anchor."""
+
+    trigger_type: TriggerType
+    start_time: datetime
+    scheduled_start_time: datetime | None = None
 
 
 @activity.defn
-async def validate_trigger_inputs_activity(
-    inputs: ValidateTriggerInputsActivityInputs,
-) -> DSLValidationResult:
-    res = validate_trigger_inputs(
-        inputs.dsl, inputs.trigger_inputs, raise_exceptions=True
-    )
-    return res
+def resolve_time_anchor_activity(
+    inputs: ResolveTimeAnchorActivityInputs,
+) -> datetime:
+    """Resolve the time anchor based on trigger type.
+
+    This activity is recorded in workflow history and replayed on reset,
+    ensuring the same time anchor is used across workflow resets.
+
+    For scheduled workflows, uses TemporalScheduledStartTime (the intended schedule time).
+    For other triggers (webhook, manual, case), uses the workflow start time.
+    """
+    if inputs.trigger_type == TriggerType.SCHEDULED and inputs.scheduled_start_time:
+        return inputs.scheduled_start_time
+    return inputs.start_time

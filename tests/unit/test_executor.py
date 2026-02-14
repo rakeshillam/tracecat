@@ -1,37 +1,152 @@
 import asyncio
-import traceback
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession
+from tracecat_registry import RegistryOAuthSecret, SecretNotFoundError
 
+from tracecat.auth.types import Role
+from tracecat.db.models import RegistryVersion
 from tracecat.dsl.common import create_default_execution_context
-from tracecat.dsl.models import ActionStatement, RunActionInput, RunContext
-from tracecat.executor.models import ExecutorActionErrorInfo
+from tracecat.dsl.schemas import ActionStatement, RunActionInput, RunContext
+from tracecat.exceptions import ExecutionError, LoopExecutionError
+from tracecat.executor.backends.test import TestBackend
+from tracecat.executor.schemas import ActionImplementation, ExecutorActionErrorInfo
 from tracecat.executor.service import (
-    _dispatch_action,
+    dispatch_action,
     flatten_wrapped_exc_error_group,
-    run_action_from_input,
-    sync_executor_entrypoint,
 )
-from tracecat.expressions.common import ExprContext
 from tracecat.expressions.expectations import ExpectedField
 from tracecat.identifiers.workflow import WorkflowUUID
+from tracecat.integrations.enums import OAuthGrantType
+from tracecat.integrations.schemas import ProviderKey
+from tracecat.integrations.service import IntegrationService
 from tracecat.logger import logger
-from tracecat.registry.actions.models import (
+from tracecat.registry.actions.bound import BoundRegistryAction
+from tracecat.registry.actions.schemas import (
     ActionStep,
     RegistryActionCreate,
     TemplateAction,
     TemplateActionDefinition,
 )
 from tracecat.registry.actions.service import RegistryActionsService
+from tracecat.registry.lock.types import RegistryLock
 from tracecat.registry.repository import Repository
-from tracecat.secrets.models import SecretCreate, SecretKeyValue
+from tracecat.registry.versions.schemas import RegistryVersionManifestAction
+from tracecat.registry.versions.service import RegistryVersionsService
+from tracecat.secrets.schemas import SecretCreate, SecretKeyValue
 from tracecat.secrets.service import SecretsService
-from tracecat.types.auth import Role
-from tracecat.types.exceptions import ExecutionError, LoopExecutionError
+
+TEST_VERSION = "test-version"
+
+
+async def create_manifest_for_actions(
+    session: AsyncSession,
+    repo_id: UUID,
+    actions: list[BoundRegistryAction],
+    organization_id: UUID | None,
+) -> RegistryLock:
+    """Create a RegistryVersion with manifest for the given actions.
+
+    Returns a RegistryLock that can be used in RunActionInput.
+    """
+    assert organization_id is not None, "organization_id must be provided"
+
+    from sqlalchemy import select
+
+    from tracecat.db.models import RegistryRepository
+
+    # Query the repository to get the origin
+    result = await session.execute(
+        select(RegistryRepository).where(RegistryRepository.id == repo_id)
+    )
+    repo = result.scalar_one()
+    origin = repo.origin
+
+    # Build manifest actions dict
+    manifest_actions = {}
+    action_bindings = {}
+
+    for bound_action in actions:
+        action_create = RegistryActionCreate.from_bound(bound_action, repo_id)
+        action_name = f"{action_create.namespace}.{action_create.name}"
+        manifest_action = RegistryVersionManifestAction.from_action_create(
+            action_create
+        )
+        manifest_actions[action_name] = manifest_action.model_dump(mode="json")
+        action_bindings[action_name] = origin
+
+    # Add core.transform.reshape which is often used in tests
+    core_reshape_impl = {
+        "type": "udf",
+        "url": origin,  # Required field
+        "module": "tracecat_registry.core.transform",
+        "name": "reshape",
+    }
+    manifest_actions["core.transform.reshape"] = {
+        "namespace": "core.transform",
+        "name": "reshape",
+        "action_type": "udf",
+        "description": "Transform data",
+        "interface": {"expects": {}, "returns": None},
+        "implementation": core_reshape_impl,
+    }
+    action_bindings["core.transform.reshape"] = origin
+
+    manifest = {
+        "schema_version": "1.0",
+        "actions": manifest_actions,
+    }
+
+    # Create RegistryVersion
+    rv = RegistryVersion(
+        organization_id=organization_id,
+        repository_id=repo_id,
+        version=TEST_VERSION,
+        manifest=manifest,
+        tarball_uri="s3://test/test.tar.gz",
+    )
+    session.add(rv)
+    await session.commit()
+
+    # Populate index from manifest
+    versions_svc = RegistryVersionsService(session)
+    await versions_svc.populate_index_from_manifest(rv, commit=True)
+
+    return RegistryLock(
+        origins={origin: TEST_VERSION},
+        actions=action_bindings,
+    )
+
+
+def make_registry_lock(action: str, origin: str = "tracecat_registry") -> RegistryLock:
+    """Helper to create a RegistryLock for a single action.
+
+    Note: This is for unit tests with mocked resolution. For integration tests,
+    use create_manifest_for_actions() to create proper database entries.
+    """
+    return RegistryLock(
+        origins={origin: TEST_VERSION},
+        actions={action: origin},
+    )
+
+
+async def run_action_test(input: RunActionInput, role: Role) -> Any:
+    """Test helper: execute action using production code path.
+
+    Uses dispatch_action to ensure proper service-layer orchestration
+    for both UDF and template actions.
+    """
+    from tracecat.contexts import ctx_role
+
+    ctx_role.set(role)
+    backend = TestBackend()
+    return await dispatch_action(backend, input)
 
 
 @pytest.fixture
@@ -45,6 +160,7 @@ def mock_run_context():
         wf_exec_id=wf_exec_id,
         wf_run_id=run_id,
         environment="default",
+        logical_time=datetime.now(UTC),
     )
 
 
@@ -95,7 +211,8 @@ async def test_executor_can_run_udf_with_secrets(
     repo._register_udfs_from_package(mock_package)
 
     # Sanity check: Returns None because we haven't set secrets
-    assert repo.get("testing.fetch_secret").fn("TEST_UDF_SECRET_KEY") is None  # type: ignore
+    with pytest.raises(SecretNotFoundError):
+        repo.get("testing.fetch_secret").fn("TEST_UDF_SECRET_KEY")
 
     sec_service = SecretsService(session, role=test_role)
     try:
@@ -119,6 +236,14 @@ async def test_executor_can_run_udf_with_secrets(
             )
         )
 
+        # Create manifest for the test actions
+        registry_lock = await create_manifest_for_actions(
+            session,
+            db_repo_id,
+            [repo.get("testing.fetch_secret")],
+            test_role.organization_id,
+        )
+
         input = RunActionInput(
             task=ActionStatement(
                 ref="test",
@@ -129,10 +254,11 @@ async def test_executor_can_run_udf_with_secrets(
             ),
             exec_context=create_default_execution_context(),
             run_context=mock_run_context,
+            registry_lock=registry_lock,
         )
 
         # Act
-        result = await run_action_from_input(input, test_role)
+        result = await run_action_test(input, test_role)
 
         # Assert
         assert result == "__SECRET_VALUE_UDF__"
@@ -158,8 +284,9 @@ async def test_executor_can_run_template_action_with_secret(
     assert "testing.add_100" in repo
     assert repo.get("testing.add_100").fn(100) == 200  # type: ignore
 
-    # Sanity check: Returns None because we haven't set secrets
-    assert repo.get("testing.fetch_secret").fn("TEST_TEMPLATE_SECRET_KEY") is None  # type: ignore
+    # Sanity check: Raises SecretNotFoundError because we haven't set secrets
+    with pytest.raises(SecretNotFoundError):
+        repo.get("testing.fetch_secret").fn("TEST_TEMPLATE_SECRET_KEY")
 
     # 2. Add secrets
     sec_service = SecretsService(session, role=test_role)
@@ -222,6 +349,14 @@ async def test_executor_can_run_template_action_with_secret(
             )
         )
 
+        # Create manifest for the test actions (both template and UDF)
+        registry_lock = await create_manifest_for_actions(
+            session,
+            db_repo_id,
+            [repo.get("testing.template_action"), repo.get("testing.fetch_secret")],
+            test_role.organization_id,
+        )
+
         input = RunActionInput(
             task=ActionStatement(
                 ref="test",
@@ -232,10 +367,11 @@ async def test_executor_can_run_template_action_with_secret(
             ),
             exec_context=create_default_execution_context(),
             run_context=mock_run_context,
+            registry_lock=registry_lock,
         )
 
         # Act
-        result = await run_action_from_input(input, test_role)
+        result = await run_action_test(input, test_role)
 
         # Assert
         assert result == "__SECRET_VALUE__"
@@ -244,22 +380,298 @@ async def test_executor_can_run_template_action_with_secret(
         await sec_service.delete_secret(secret)
 
 
-async def mock_action(input: Any, **kwargs):
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_executor_can_run_template_action_with_oauth(
+    test_role, db_session_with_repo, mock_run_context
+):
+    """Test that Template Action steps correctly pull in OAuth secrets.
+
+    This test validates that:
+    1. OAuth integrations are properly loaded
+    2. OAUTH.* expressions resolve correctly
+    3. OAuth tokens are mirrored to SECRETS.* for backward compatibility
+    4. Template actions can access both namespaces
+    """
+
+    session, db_repo_id = db_session_with_repo
+    # Test OAuth token value
+    oauth_token_value = "__TEST_OAUTH_TOKEN_VALUE__"
+
+    # 1. Create OAuth integration
+    svc = IntegrationService(session, role=test_role)
+    await svc.store_integration(
+        provider_key=ProviderKey(
+            id="microsoft_teams",
+            grant_type=OAuthGrantType.AUTHORIZATION_CODE,
+        ),
+        access_token=SecretStr(oauth_token_value),
+        refresh_token=None,
+        expires_in=3600,
+    )
+
+    # 3. Create a test template action that uses both OAuth and legacy secrets
+    # This tests that OAuth tokens are properly resolved and available
+    test_action = TemplateAction(
+        type="action",
+        definition=TemplateActionDefinition(
+            title="Test OAuth Action",
+            description="Test that OAuth tokens are resolved correctly",
+            name="oauth_test",
+            namespace="testing.oauth",
+            display_group="Testing",
+            expects={
+                "message": ExpectedField(
+                    type="str",
+                    description="A test message",
+                )
+            },
+            secrets=[
+                RegistryOAuthSecret(
+                    provider_id="microsoft_teams",
+                    grant_type="authorization_code",
+                )
+            ],
+            steps=[
+                ActionStep(
+                    ref="verify_tokens",
+                    action="core.transform.reshape",
+                    args={
+                        "value": {
+                            "oauth_token": "${{ SECRETS.microsoft_teams_oauth.MICROSOFT_TEAMS_USER_TOKEN }}",
+                        }
+                    },
+                )
+            ],
+            returns="${{ steps.verify_tokens.result }}",
+        ),
+    )
+
+    # 4. Register the test template action in the repository
+    # NOTE: We use the Repository class to register template actions in memory
+    # This allows us to test template execution without database registration
+    repo = Repository()
+    repo.register_template_action(test_action)
+
+    ra_service = RegistryActionsService(session, role=test_role)
+    await ra_service.create_action(
+        RegistryActionCreate.from_bound(
+            repo.get("testing.oauth.oauth_test"), db_repo_id
+        )
+    )
+
+    # Create manifest for the test actions
+    registry_lock = await create_manifest_for_actions(
+        session,
+        db_repo_id,
+        [repo.get("testing.oauth.oauth_test")],
+        test_role.organization_id,
+    )
+
+    # 5. Create and run the action
+    input = RunActionInput(
+        task=ActionStatement(
+            ref="test",
+            action="testing.oauth.oauth_test",
+            run_if=None,
+            for_each=None,
+            args={"message": "test message"},
+        ),
+        exec_context=create_default_execution_context(),
+        run_context=mock_run_context,
+        registry_lock=registry_lock,
+    )
+
+    # Act
+    result = await run_action_test(input, test_role)
+
+    # Assert - the template returns the result from the reshape step
+    # which contains oauth_token
+    assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
+    assert "oauth_token" in result, (
+        f"Expected 'oauth_token' in result, got {result.keys()}"
+    )
+
+    # Verify the values
+    assert result["oauth_token"] == oauth_token_value, (
+        f"OAuth token from SECRETS namespace mismatch. "
+        f"Expected {oauth_token_value}, got {result['oauth_token']}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_executor_can_run_udf_with_oauth(
+    mock_package, test_role, db_session_with_repo, mock_run_context, monkeysession
+):
+    """Test that the executor can run a UDF with OAuth secrets through Ray.
+
+    This test validates that:
+    1. OAuth integrations are properly loaded for UDFs
+    2. OAuth tokens are accessible via the SECRETS namespace in UDFs
+    3. UDFs can directly access OAuth tokens through the secrets manager
+    """
+
+    session, db_repo_id = db_session_with_repo
+
+    from tracecat import config
+
+    monkeysession.setattr(config, "TRACECAT__UNSAFE_DISABLE_SM_MASKING", True)
+
+    # Test OAuth token value
+    oauth_token_value = "__TEST_UDF_OAUTH_TOKEN_VALUE__"
+
+    # 1. Create OAuth integration
+    svc = IntegrationService(session, role=test_role)
+    await svc.store_integration(
+        provider_key=ProviderKey(
+            id="microsoft_teams",
+            grant_type=OAuthGrantType.AUTHORIZATION_CODE,
+        ),
+        access_token=SecretStr(oauth_token_value),
+        refresh_token=None,
+        expires_in=3600,
+    )
+
+    # 2. Register UDFs including the OAuth one
+    repo = Repository()
+    repo._register_udfs_from_package(mock_package)
+
+    # Sanity check: Verify the OAuth UDF is registered
+    assert "testing.fetch_oauth_token" in repo
+
+    # 3. Create registry action for the OAuth UDF
+    ra_service = RegistryActionsService(session, role=test_role)
+    await ra_service.create_action(
+        RegistryActionCreate.from_bound(
+            repo.get("testing.fetch_oauth_token"), db_repo_id
+        )
+    )
+
+    # Create manifest for the test actions
+    registry_lock = await create_manifest_for_actions(
+        session,
+        db_repo_id,
+        [repo.get("testing.fetch_oauth_token")],
+        test_role.organization_id,
+    )
+
+    # 4. Create and run the action
+    input = RunActionInput(
+        task=ActionStatement(
+            ref="test",
+            action="testing.fetch_oauth_token",
+            run_if=None,
+            for_each=None,
+            args={},
+        ),
+        exec_context=create_default_execution_context(),
+        run_context=mock_run_context,
+        registry_lock=registry_lock,
+    )
+
+    # Act
+    result = await run_action_test(input, test_role)
+
+    # Assert - the UDF returns the OAuth token value
+    assert result == oauth_token_value, (
+        f"OAuth token from UDF mismatch. Expected {oauth_token_value}, got {result}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_executor_can_run_udf_with_oauth_in_secret_expression(
+    test_role, db_session_with_repo, mock_run_context, monkeysession
+):
+    """Test that the executor can run a UDF with OAuth secrets in a secret expression."""
+
+    session, db_repo_id = db_session_with_repo
+
+    from tracecat import config
+
+    monkeysession.setattr(config, "TRACECAT__UNSAFE_DISABLE_SM_MASKING", True)
+
+    # Test OAuth token value
+    oauth_token_value = "__TEST_UDF_OAUTH_TOKEN_VALUE__"
+
+    # 1. Create OAuth integration
+    svc = IntegrationService(session, role=test_role)
+    await svc.store_integration(
+        provider_key=ProviderKey(
+            id="microsoft_teams",
+            grant_type=OAuthGrantType.AUTHORIZATION_CODE,
+        ),
+        access_token=SecretStr(oauth_token_value),
+        refresh_token=None,
+        expires_in=3600,
+    )
+
+    # Create manifest for core actions
+    registry_lock = await create_manifest_for_actions(
+        session, db_repo_id, [], test_role.organization_id
+    )
+
+    # 4. Create and run the action
+    input = RunActionInput(
+        task=ActionStatement(
+            ref="test",
+            action="core.transform.reshape",
+            args={
+                "value": "${{ SECRETS.microsoft_teams_oauth.MICROSOFT_TEAMS_USER_TOKEN }}",
+            },
+        ),
+        exec_context=create_default_execution_context(),
+        run_context=mock_run_context,
+        registry_lock=registry_lock,
+    )
+
+    # Act
+    result = await run_action_test(input, test_role)
+
+    # Assert - the UDF returns the OAuth token value
+    assert result == oauth_token_value, (
+        f"OAuth token from UDF mismatch. Expected {oauth_token_value}, got {result}"
+    )
+
+
+async def mock_action(input: Any, role: Any = None):
     """Mock action that simulates some async work"""
+    del role  # unused
     await asyncio.sleep(0.1)
     return input
 
 
 @pytest.mark.integration
-def test_sync_executor_entrypoint(
+@pytest.mark.anyio
+async def test_direct_backend_execute(
     test_role: Role, mock_run_context: RunContext, monkeypatch: pytest.MonkeyPatch
 ):
-    """Test that the sync executor entrypoint properly handles async operations."""
+    """Test that the test backend properly handles async operations."""
+    from tracecat.executor.backends.test import TestBackend
+    from tracecat.executor.schemas import ExecutorResultSuccess, ResolvedContext
 
-    # Mock the run_action_from_input function
-    monkeypatch.setattr("tracecat.executor.service.run_action_from_input", mock_action)
+    # Mock _execute_with_context to return a simple result
+    async def mock_execute_with_context(self, input, role, resolved_context):
+        return {"input": input.task.args}
 
-    # Run the entrypoint
+    monkeypatch.setattr(
+        TestBackend, "_execute_with_context", mock_execute_with_context
+    )
+
+    backend = TestBackend()
+    resolved_context = ResolvedContext(
+        secrets={},
+        variables={},
+        action_impl=ActionImplementation(type="udf", module="test", name="mock"),
+        evaluated_args={},
+        workspace_id="test-workspace",
+        workflow_id="test-workflow",
+        run_id="test-run",
+        executor_token="",
+    )
+
+    # Run the backend execute
     for i in range(10):
         input = RunActionInput(
             task=ActionStatement(
@@ -271,23 +683,41 @@ def test_sync_executor_entrypoint(
             ),
             exec_context=create_default_execution_context(),
             run_context=mock_run_context,
+            registry_lock=make_registry_lock("test.mock_action"),
         )
-        result = sync_executor_entrypoint(input, test_role)
-        assert result == input
+        result = await backend.execute(input, test_role, resolved_context)
+        assert isinstance(result, ExecutorResultSuccess)
+        assert result.result == {"input": {"value": i}}
 
 
 async def mock_error(*args, **kwargs):
-    """Mock run_action_from_input to raise an error"""
+    """Mock _execute_with_context to raise an error"""
     raise ValueError("__EXPECTED_MESSAGE__")
 
 
 @pytest.mark.integration
-def test_sync_executor_entrypoint_returns_wrapped_error(
+@pytest.mark.anyio
+async def test_direct_backend_returns_wrapped_error(
     test_role: Role, mock_run_context: RunContext, monkeypatch: pytest.MonkeyPatch
 ):
-    """Test that the sync executor entrypoint properly handles wrapped errors."""
+    """Test that the test backend properly handles wrapped errors."""
+    from tracecat.executor.backends.test import TestBackend
+    from tracecat.executor.schemas import ExecutorResultFailure, ResolvedContext
+
     # Create a test input with an action that will raise an error
-    monkeypatch.setattr("tracecat.executor.service.run_action_from_input", mock_error)
+    monkeypatch.setattr(TestBackend, "_execute_with_context", mock_error)
+
+    backend = TestBackend()
+    resolved_context = ResolvedContext(
+        secrets={},
+        variables={},
+        action_impl=ActionImplementation(type="udf", module="test", name="error"),
+        evaluated_args={},
+        workspace_id="test-workspace",
+        workflow_id="test-workflow",
+        run_id="test-run",
+        executor_token="",
+    )
 
     input = RunActionInput(
         task=ActionStatement(
@@ -299,16 +729,18 @@ def test_sync_executor_entrypoint_returns_wrapped_error(
         ),
         exec_context=create_default_execution_context(),
         run_context=mock_run_context,
+        registry_lock=make_registry_lock("test.error_action"),
     )
 
-    # Run the entrypoint and verify it returns a RegistryActionErrorInfo
-    result = sync_executor_entrypoint(input, test_role)
-    assert isinstance(result, ExecutorActionErrorInfo)
-    assert result.type == "ValueError"
-    assert result.message == "__EXPECTED_MESSAGE__"
-    assert result.action_name == "test.error_action"
-    assert result.filename == __file__
-    assert result.function == "mock_error"
+    # Run the backend execute and verify it returns a failure result
+    result = await backend.execute(input, test_role, resolved_context)
+    assert isinstance(result, ExecutorResultFailure)
+    error_info = result.error
+    assert error_info.type == "ValueError"
+    assert error_info.message == "__EXPECTED_MESSAGE__"
+    assert error_info.action_name == "test.error_action"
+    assert error_info.filename == __file__
+    assert error_info.function == "mock_error"
 
 
 @pytest.mark.anyio
@@ -317,39 +749,18 @@ async def test_dispatcher(
     test_role,
     mock_run_context,
     db_session_with_repo,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    """Try to replicate `Error in loop`ty error, where usually we fail validation inside the executor loop.
+    """Try to replicate `Error in loop` error, where usually we fail validation inside the executor loop.
 
     We will execute everything in the current thread.
     1. Add mock package with a function that will raise an error
     """
+    from tracecat.contexts import ctx_role
+    from tracecat.executor.backends.test import TestBackend
 
-    # Mock out run_action_on_ray_cluster
-    async def mocked_executor_entrypoint(
-        input: RunActionInput, role: Role, *args, **kwargs
-    ):
-        try:
-            return await run_action_from_input(input=input, role=role)
-        except Exception as e:
-            # Raise the error proxy here
-            logger.error(
-                "Error running action, raising error proxy",
-                error=e,
-                type=type(e).__name__,
-                traceback=traceback.format_exc(),
-            )
-            iteration = kwargs.get("iteration", None)
-            exec_result = ExecutorActionErrorInfo.from_exc(e, input.task.action)
-            if iteration is not None:
-                exec_result.loop_iteration = iteration
-                exec_result.loop_vars = input.exec_context[ExprContext.LOCAL_VARS]
-            raise ExecutionError(info=exec_result) from None
+    # Set up the role context for dispatch_action
+    ctx_role.set(test_role)
 
-    monkeypatch.setattr(
-        "tracecat.executor.service.run_action_on_ray_cluster",
-        mocked_executor_entrypoint,
-    )
     session, db_repo_id = db_session_with_repo
     repo = Repository()
     repo._register_udfs_from_package(mock_package)
@@ -366,6 +777,14 @@ async def test_dispatcher(
         RegistryActionCreate.from_bound(repo.get("testing.add_nums"), db_repo_id)
     )
 
+    # Create manifest for the test actions
+    registry_lock = await create_manifest_for_actions(
+        session,
+        db_repo_id,
+        [repo.get("testing.add_100"), repo.get("testing.add_nums")],
+        test_role.organization_id,
+    )
+
     input = RunActionInput(
         task=ActionStatement(
             ref="test",
@@ -376,11 +795,12 @@ async def test_dispatcher(
         ),
         exec_context=create_default_execution_context(),
         run_context=mock_run_context,
+        registry_lock=registry_lock,
     )
 
     # Act
-
-    result = await _dispatch_action(input, test_role)
+    backend = TestBackend()
+    result = await dispatch_action(backend, input)
 
     # This should run correctly
     assert result == [101, 102, 103, 104, 105]
@@ -398,11 +818,12 @@ async def test_dispatcher(
         ),
         exec_context=create_default_execution_context(),
         run_context=mock_run_context,
+        registry_lock=registry_lock,
     )
 
     # Act
     with pytest.raises(LoopExecutionError) as e:
-        result = await _dispatch_action(input, test_role)
+        result = await dispatch_action(backend, input)
     assert len(e.value.loop_errors) == 1
     assert e.value.loop_errors[0].info.loop_iteration == 2
     assert e.value.loop_errors[0].info.loop_vars == {"x": None}
@@ -419,11 +840,12 @@ async def test_dispatcher(
         ),
         exec_context=create_default_execution_context(),
         run_context=mock_run_context,
+        registry_lock=registry_lock,
     )
 
     # Act
     with pytest.raises(LoopExecutionError) as e:
-        result = await _dispatch_action(input, test_role)
+        result = await dispatch_action(backend, input)
     assert len(e.value.loop_errors) == 1
     assert e.value.loop_errors[0].info.loop_iteration == 1
     assert e.value.loop_errors[0].info.loop_vars == {"x": None}

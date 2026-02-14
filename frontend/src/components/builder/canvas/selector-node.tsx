@@ -8,8 +8,7 @@ import {
 import fuzzysort from "fuzzysort"
 import { CloudOffIcon, XIcon } from "lucide-react"
 import React, { useCallback, useEffect, useMemo, useRef } from "react"
-import { actionsCreateAction, type RegistryActionReadMinimal } from "@/client"
-import type { ActionNodeType } from "@/components/builder/canvas/action-node"
+import type { GraphOperation, RegistryActionReadMinimal } from "@/client"
 import { isEphemeral } from "@/components/builder/canvas/canvas"
 import { getIcon } from "@/components/icons"
 import {
@@ -25,7 +24,11 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "@/components/ui/use-toast"
-import { useBuilderRegistryActions } from "@/lib/hooks"
+import {
+  useBuilderRegistryActions,
+  useGraph,
+  useGraphOperations,
+} from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 import { useWorkflowBuilder } from "@/providers/builder"
 
@@ -36,14 +39,63 @@ const SEARCH_KEYS = [
   "action",
   "default_title",
   "display_group",
-] as (keyof RegistryActionReadMinimal)[]
+] as const satisfies readonly (keyof RegistryActionReadMinimal)[]
+
+// Map key names to their index in SEARCH_KEYS for resilient result access
+const SEARCH_KEY_INDEX: Record<(typeof SEARCH_KEYS)[number], number> =
+  SEARCH_KEYS.reduce(
+    (acc, key, index) => {
+      acc[key] = index
+      return acc
+    },
+    {} as Record<(typeof SEARCH_KEYS)[number], number>
+  )
 
 function filterActions(actions: RegistryActionReadMinimal[], search: string) {
   const results = fuzzysort.go<RegistryActionReadMinimal>(search, actions, {
     all: true,
-    keys: SEARCH_KEYS,
+    keys: SEARCH_KEYS as unknown as (keyof RegistryActionReadMinimal)[],
   })
   return results
+}
+
+/**
+ * Safely renders highlighted text using fuzzysort indexes.
+ * Avoids dangerouslySetInnerHTML to prevent XSS vulnerabilities.
+ * Uses code-unit based slicing to correctly handle emoji/combining characters.
+ */
+function HighlightedText({
+  result,
+  text,
+}: {
+  result: Fuzzysort.Result | null
+  text: string
+}) {
+  if (!result || !result.indexes || result.indexes.length === 0) {
+    return <>{text}</>
+  }
+
+  // Sort indexes and build segments using code-unit positions
+  const sortedIndexes = [...result.indexes].sort((a, b) => a - b)
+  const segments: React.ReactNode[] = []
+  let lastEnd = 0
+
+  for (const idx of sortedIndexes) {
+    // Add non-highlighted segment before this match
+    if (idx > lastEnd) {
+      segments.push(text.slice(lastEnd, idx))
+    }
+    // Add highlighted character
+    segments.push(<b key={idx}>{text[idx]}</b>)
+    lastEnd = idx + 1
+  }
+
+  // Add remaining non-highlighted segment
+  if (lastEnd < text.length) {
+    segments.push(text.slice(lastEnd))
+  }
+
+  return <>{segments}</>
 }
 
 export type SelectorNodeData = {
@@ -216,8 +268,38 @@ function ActionCommandGroup({
   registryActions: RegistryActionReadMinimal[]
   inputValue: string
 }) {
-  const { workspaceId, workflowId, reactFlow } = useWorkflowBuilder()
-  const { getNode, setNodes, setEdges } = reactFlow
+  const {
+    workspaceId,
+    workflowId,
+    reactFlow,
+    setSelectedNodeId,
+    actionPanelRef,
+  } = useWorkflowBuilder()
+  const { getNode, getEdges, setNodes, setEdges } = reactFlow
+  const { data: graphData } = useGraph(workspaceId, workflowId ?? "")
+  const { applyGraphOperations, refetchGraph } = useGraphOperations(
+    workspaceId,
+    workflowId ?? ""
+  )
+
+  const openActionPanelForNode = useCallback(
+    (actionId?: string) => {
+      if (!actionId) {
+        return
+      }
+
+      setSelectedNodeId(actionId)
+      const panelHandle = actionPanelRef.current
+      if (panelHandle) {
+        if (panelHandle.setOpen) {
+          panelHandle.setOpen(true)
+        } else {
+          panelHandle.expand?.()
+        }
+      }
+    },
+    [actionPanelRef, setSelectedNodeId]
+  )
 
   // Move sortedActions and filterResults logic here
   const sortedActions = useMemo(() => {
@@ -236,58 +318,150 @@ function ActionCommandGroup({
       console.log("Selected action:", registryAction)
       const { position } = getNode(nodeId) as Node<SelectorNodeData>
 
+      // Find any incoming edge to the selector node before we modify state
+      const currentEdges = getEdges()
+      const incomingEdge = currentEdges.find((e) => e.target === nodeId)
+
+      const type = registryAction.action
+      const title = registryAction.default_title || registryAction.action
+
       try {
-        const type = registryAction.action
-        const title = registryAction.default_title || registryAction.action
-        const { id } = await actionsCreateAction({
-          workspaceId,
-          requestBody: {
-            workflow_id: workflowId,
+        const addNodeOp: GraphOperation = {
+          type: "add_node",
+          payload: {
             type,
             title,
+            position_x: position.x,
+            position_y: position.y,
           },
+        }
+
+        // Step 1: create node
+        const graphAfterAdd = await applyGraphOperations({
+          baseVersion: graphData?.version ?? 1,
+          operations: [addNodeOp],
         })
-        const newNode = {
-          id,
-          type: "udf",
-          position,
-          data: {
-            type,
-            isConfigured: false,
-          },
-        } as ActionNodeType
-        // Given successful creation, we can now remove the selector node
-        // Find the current "selector" node and replace it with the new node
-        // XXX: Actually just filter all ephemeral nodes
-        // Create Action in database
-        setNodes((prevNodes) =>
-          prevNodes
-            .filter((n) => !isEphemeral(n))
-            .map((n) => ({ ...n, selected: false }))
-            .concat({ ...newNode, selected: true })
+
+        // Identify the new node by diffing ids
+        const previousIds = new Set(
+          (graphData?.nodes ?? []).map((n) => String(n.id))
         )
-        // At this point, we have an edge between some other node and the selector node
-        // We need to create an edge between the new node and the other node
+        const newNode = graphAfterAdd.nodes.find(
+          (n) => !previousIds.has(String(n.id))
+        )
+        const newNodeId = newNode?.id as string | undefined
+
+        // Step 2: connect incoming edge to the new node
+        if (incomingEdge && newNodeId) {
+          const isTrigger = incomingEdge.source.startsWith("trigger")
+          const addEdgeOp: GraphOperation = {
+            type: "add_edge",
+            payload: {
+              source_id: incomingEdge.source,
+              source_type: isTrigger ? "trigger" : "udf",
+              target_id: newNodeId,
+              source_handle: isTrigger
+                ? undefined
+                : ((incomingEdge.sourceHandle as "success" | "error") ??
+                  "success"),
+            },
+          }
+
+          await applyGraphOperations({
+            baseVersion: graphAfterAdd.version,
+            operations: [addEdgeOp],
+          })
+        }
+
+        // Let the canvas react to graph cache updates; just remove ephemeral selector locally
+        setNodes((prevNodes) => prevNodes.filter((n) => !isEphemeral(n)))
         setEdges((prevEdges) =>
-          prevEdges.map((edge) =>
-            edge.target === nodeId
-              ? {
-                  ...edge,
-                  target: newNode.id,
-                }
-              : edge
-          )
+          prevEdges.filter((edge) => edge.target !== nodeId)
         )
+        openActionPanelForNode(newNodeId)
       } catch (error) {
-        console.error("An error occurred while creating a new node:", error)
-        toast({
-          title: "Failed to create new node",
-          description: "Could not create new node.",
-        })
-        return // Abort
+        const apiError = error as { status?: number }
+        if (apiError.status === 409) {
+          console.log("Version conflict, refetching graph and retrying...")
+          try {
+            const latestGraph = await refetchGraph()
+            const addNodeOp: GraphOperation = {
+              type: "add_node",
+              payload: {
+                type,
+                title,
+                position_x: position.x,
+                position_y: position.y,
+              },
+            }
+            const graphAfterAdd = await applyGraphOperations({
+              baseVersion: latestGraph.version,
+              operations: [addNodeOp],
+            })
+
+            const previousIds = new Set(
+              (latestGraph.nodes ?? []).map((n) => String(n.id))
+            )
+            const newNode = graphAfterAdd.nodes.find(
+              (n) => !previousIds.has(String(n.id))
+            )
+            const newNodeId = newNode?.id as string | undefined
+
+            if (incomingEdge && newNodeId) {
+              const isTrigger = incomingEdge.source.startsWith("trigger")
+              const addEdgeOp: GraphOperation = {
+                type: "add_edge",
+                payload: {
+                  source_id: incomingEdge.source,
+                  source_type: isTrigger ? "trigger" : "udf",
+                  target_id: newNodeId,
+                  source_handle: isTrigger
+                    ? undefined
+                    : ((incomingEdge.sourceHandle as "success" | "error") ??
+                      "success"),
+                },
+              }
+
+              await applyGraphOperations({
+                baseVersion: graphAfterAdd.version,
+                operations: [addEdgeOp],
+              })
+            }
+
+            setNodes((prevNodes) => prevNodes.filter((n) => !isEphemeral(n)))
+            setEdges((prevEdges) =>
+              prevEdges.filter((edge) => edge.target !== nodeId)
+            )
+            openActionPanelForNode(newNodeId)
+          } catch (retryError) {
+            console.error("Failed to persist node after retry:", retryError)
+            toast({
+              title: "Failed to create new node",
+              description: "Could not create new node after retry.",
+            })
+          }
+        } else {
+          console.error("An error occurred while creating a new node:", error)
+          toast({
+            title: "Failed to create new node",
+            description: "Could not create new node.",
+          })
+        }
       }
     },
-    [getNode, nodeId, workflowId, workspaceId, setNodes, setEdges]
+    [
+      getNode,
+      getEdges,
+      nodeId,
+      workflowId,
+      workspaceId,
+      setNodes,
+      setEdges,
+      applyGraphOperations,
+      refetchGraph,
+      graphData?.version,
+      openActionPanelForNode,
+    ]
   )
 
   return (
@@ -296,39 +470,29 @@ function ActionCommandGroup({
         const action = result.obj
 
         if (highlight) {
-          const highlighted = SEARCH_KEYS.reduce(
-            (acc, key, index) => {
-              const currRes = result[index]
-              acc[key] = currRes.highlight() || String(action[key])
-              return acc
-            },
-            {} as Record<keyof RegistryActionReadMinimal, string>
-          )
+          // Get fuzzysort results by key name (resilient to SEARCH_KEYS reordering)
+          const actionResult = result[SEARCH_KEY_INDEX.action]
+          const titleResult = result[SEARCH_KEY_INDEX.default_title]
 
           return (
             <CommandItem
               key={action.action}
-              className="text-xs"
+              className="flex items-center gap-3 py-2 text-xs"
               onSelect={async () => await handleSelect(action)}
             >
-              <div className="flex-col">
-                <div className="flex items-center justify-start">
-                  {getIcon(action.action, {
-                    className: "size-5 mr-2",
-                  })}
-                  <span
-                    className="text-xs"
-                    dangerouslySetInnerHTML={{
-                      __html: highlighted.default_title,
-                    }}
+              {getIcon(action.action, {
+                className: "size-8 rounded-md border p-1.5",
+              })}
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-xs font-medium">
+                  <HighlightedText
+                    result={titleResult}
+                    text={action.default_title ?? action.action}
                   />
-                </div>
-                <span
-                  className="text-xs text-muted-foreground"
-                  dangerouslySetInnerHTML={{
-                    __html: highlighted.action,
-                  }}
-                />
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
+                  <HighlightedText result={actionResult} text={action.action} />
+                </span>
               </div>
             </CommandItem>
           )
@@ -336,17 +500,17 @@ function ActionCommandGroup({
           return (
             <CommandItem
               key={action.action}
-              className="text-xs"
+              className="flex items-center gap-3 py-2 text-xs"
               onSelect={async () => await handleSelect(action)}
             >
-              <div className="flex-col">
-                <div className="flex items-center justify-start">
-                  {getIcon(action.action, {
-                    className: "size-5 mr-2",
-                  })}
-                  <span className="text-xs">{action.default_title}</span>
-                </div>
-                <span className="text-xs text-muted-foreground">
+              {getIcon(action.action, {
+                className: "size-8 rounded-md border p-1.5",
+              })}
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-xs font-medium">
+                  {action.default_title}
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
                   {action.action}
                 </span>
               </div>

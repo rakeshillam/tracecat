@@ -1,10 +1,13 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlmodel.ext.asyncio.session import AsyncSession
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from tracecat.auth.types import AccessLevel, Role
 from tracecat.cases.enums import CaseEventType, CasePriority, CaseSeverity, CaseStatus
-from tracecat.cases.models import (
+from tracecat.cases.schemas import (
     AssigneeChangedEvent,
     CaseCreate,
     ClosedEvent,
@@ -18,8 +21,8 @@ from tracecat.cases.models import (
     UpdatedEvent,
 )
 from tracecat.cases.service import CaseEventsService, CasesService
-from tracecat.types.auth import AccessLevel, Role
-from tracecat.types.exceptions import TracecatAuthorizationError
+from tracecat.db.models import CaseEvent
+from tracecat.exceptions import TracecatAuthorizationError
 
 pytestmark = pytest.mark.usefixtures("db")
 
@@ -29,11 +32,12 @@ async def test_events_service_initialization_requires_workspace(
     session: AsyncSession,
 ) -> None:
     """Test that events service initialization requires a workspace ID."""
-    # Create a role without workspace_id
+    # Create a role without workspace_id (but with organization_id to pass org check)
     role_without_workspace = Role(
         type="service",
         user_id=uuid.uuid4(),
         workspace_id=None,
+        organization_id=uuid.uuid4(),
         service_id="tracecat-service",
         access_level=AccessLevel.BASIC,
     )
@@ -83,7 +87,7 @@ class TestCaseEventsService:
         assert created_event.case_id == test_case.id
         assert created_event.type == CaseEventType.CASE_CREATED
         assert created_event.user_id == case_events_service.role.user_id
-        assert created_event.owner_id == case_events_service.workspace_id
+        assert created_event.workspace_id == case_events_service.workspace_id
         assert created_event.data is not None
 
     async def test_create_status_changed_event(
@@ -377,6 +381,7 @@ class TestCaseEventsService:
             type="service",
             user_id=different_user_id,
             workspace_id=svc_role.workspace_id,
+            organization_id=svc_role.organization_id,
             service_id=svc_role.service_id,
             access_level=AccessLevel.BASIC,
         )
@@ -465,3 +470,45 @@ class TestCaseEventsService:
         assert all(event.case_id == test_case2.id for event in events2)
 
         assert events1[0].case_id != events2[0].case_id
+
+    async def test_case_viewed_event_created_once_per_window(
+        self,
+        case_events_service: CaseEventsService,
+        test_case,
+    ) -> None:
+        """Case viewed events should be created at most once within the dedupe window."""
+        first_event = await case_events_service.create_case_viewed_event(test_case)
+        assert first_event is not None
+        assert first_event.type == CaseEventType.CASE_VIEWED
+        assert first_event.user_id == case_events_service.role.user_id
+        await case_events_service.session.commit()
+
+        duplicate_event = await case_events_service.create_case_viewed_event(
+            test_case, dedupe_window=timedelta(minutes=5)
+        )
+        assert duplicate_event is None
+
+    async def test_case_viewed_event_created_after_window_elapsed(
+        self,
+        case_events_service: CaseEventsService,
+        test_case,
+    ) -> None:
+        """A new case viewed event should be created once the dedupe window expires."""
+        first_event = await case_events_service.create_case_viewed_event(test_case)
+        assert first_event is not None
+        await case_events_service.session.commit()
+
+        # Move the first event outside the dedupe window.
+        await case_events_service.session.execute(
+            sa.update(CaseEvent)
+            .where(CaseEvent.id == first_event.id)
+            .values(created_at=datetime.now(UTC) - timedelta(minutes=10))
+        )
+        await case_events_service.session.commit()
+
+        new_event = await case_events_service.create_case_viewed_event(
+            test_case, dedupe_window=timedelta(minutes=5)
+        )
+        assert new_event is not None
+        assert new_event.type == CaseEventType.CASE_VIEWED
+        await case_events_service.session.commit()

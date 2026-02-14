@@ -1,7 +1,7 @@
-import os
+import base64
 
 import aioboto3
-from temporalio.client import Client
+from temporalio.client import Client, Plugin
 from temporalio.exceptions import TemporalError
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from tenacity import (
@@ -12,14 +12,16 @@ from tenacity import (
     wait_exponential,
 )
 
+from tracecat import config
 from tracecat.config import (
+    TEMPORAL__API_KEY,
     TEMPORAL__API_KEY__ARN,
     TEMPORAL__CLUSTER_NAMESPACE,
     TEMPORAL__CLUSTER_URL,
     TEMPORAL__CONNECT_RETRIES,
     TEMPORAL__METRICS_PORT,
 )
-from tracecat.dsl._converter import pydantic_data_converter
+from tracecat.dsl._converter import get_data_converter
 from tracecat.logger import logger
 
 _client: Client | None = None
@@ -30,7 +32,12 @@ async def _retrieve_temporal_api_key(arn: str) -> str:
     session = aioboto3.Session()
     async with session.client(service_name="secretsmanager") as client:
         response = await client.get_secret_value(SecretId=arn)
-        return response["SecretString"]
+        secret_string = response.get("SecretString")
+        if not secret_string and response.get("SecretBinary"):
+            secret_string = base64.b64decode(response["SecretBinary"]).decode("utf-8")
+        if not secret_string:
+            raise RuntimeError("Temporal API key secret is empty")
+        return secret_string
 
 
 @retry(
@@ -39,15 +46,15 @@ async def _retrieve_temporal_api_key(arn: str) -> str:
     retry=retry_if_exception_type((TemporalError, RuntimeError)),
     reraise=True,
 )
-async def connect_to_temporal() -> Client:
+async def connect_to_temporal(plugins: list[Plugin] | None = None) -> Client:
     api_key = None
     tls_config = False
     rpc_metadata = {}
 
     if TEMPORAL__API_KEY__ARN:
         api_key = await _retrieve_temporal_api_key(arn=TEMPORAL__API_KEY__ARN)
-    elif os.environ.get("TEMPORAL__API_KEY"):
-        api_key = os.environ.get("TEMPORAL__API_KEY")
+    elif TEMPORAL__API_KEY:
+        api_key = TEMPORAL__API_KEY
 
     if api_key is not None:
         tls_config = True
@@ -67,13 +74,16 @@ async def connect_to_temporal() -> Client:
         rpc_metadata=rpc_metadata,
         api_key=api_key,
         tls=tls_config,
-        data_converter=pydantic_data_converter,
+        data_converter=get_data_converter(
+            compression_enabled=config.TRACECAT__CONTEXT_COMPRESSION_ENABLED
+        ),
         runtime=runtime,
+        plugins=plugins or [],
     )
     return client
 
 
-async def get_temporal_client() -> Client:
+async def get_temporal_client(plugins: list[Plugin] | None = None) -> Client:
     global _client
 
     if _client is not None:
@@ -85,7 +95,7 @@ async def get_temporal_client() -> Client:
             namespace=TEMPORAL__CLUSTER_NAMESPACE,
             url=TEMPORAL__CLUSTER_URL,
         )
-        _client = await connect_to_temporal()
+        _client = await connect_to_temporal(plugins=plugins)
         logger.info("Successfully connected to Temporal server")
     except RetryError as e:
         msg = (

@@ -24,7 +24,8 @@ import { Input } from "@/components/ui/input"
 export interface DataTableToolbarProps<TData> {
   filterProps?: DataTableToolbarFilterProps
   fields?: DataTableToolbarField[]
-  onDeleteRows?: (selectedRows: Row<TData>[]) => void
+  onDeleteRows?: (selectedRows: Row<TData>[]) => Promise<void> | void
+  actions?: React.ReactNode
 }
 
 interface DataTableToolbarFilterProps {
@@ -52,6 +53,7 @@ export function DataTableToolbar<TData>({
   fields,
   table,
   onDeleteRows,
+  actions,
 }: InternalDataTableToolbarProps<TData>) {
   const isFiltered = table.getState().columnFilters.length > 0
   const hasSelection = Object.keys(table.getState().rowSelection).length > 0
@@ -59,22 +61,20 @@ export function DataTableToolbar<TData>({
   return (
     <div className="flex items-center justify-between">
       <div className="flex flex-1 items-center space-x-2">
-        <Input
-          placeholder={filterProps?.placeholder ?? "Filter..."}
-          value={
-            table
-              .getColumn(filterProps?.column ?? "")
-              ?.getFilterValue() as string
-          }
-          onChange={(event) =>
-            filterProps?.column
-              ? table
-                  .getColumn(filterProps.column)
-                  ?.setFilterValue(event.target.value)
-              : null
-          }
-          className="h-8 w-[150px] text-xs lg:w-[250px]"
-        />
+        {filterProps && (
+          <Input
+            placeholder={filterProps.placeholder ?? "Filter..."}
+            value={
+              table.getColumn(filterProps.column)?.getFilterValue() as string
+            }
+            onChange={(event) =>
+              table
+                .getColumn(filterProps.column)
+                ?.setFilterValue(event.target.value)
+            }
+            className="h-8 w-[150px] text-xs lg:w-[250px]"
+          />
+        )}
         {fields?.map((field) => (
           <DataTableFacetedFilter
             key={field.column}
@@ -109,7 +109,7 @@ export function DataTableToolbar<TData>({
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Confirm Deletion</AlertDialogTitle>
+                <AlertDialogTitle>Confirm deletion</AlertDialogTitle>
                 <AlertDialogDescription>
                   Are you sure you want to delete the selected items? This
                   action cannot be undone.
@@ -119,12 +119,13 @@ export function DataTableToolbar<TData>({
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction
                   variant="destructive"
-                  onClick={() => {
+                  onClick={async () => {
                     try {
                       setIsDeleting(true)
                       const selectedRows =
                         table.getFilteredSelectedRowModel().rows
-                      onDeleteRows(selectedRows)
+                      if (!onDeleteRows || selectedRows.length === 0) return
+                      await onDeleteRows(selectedRows)
                       table.resetRowSelection()
                     } finally {
                       setIsDeleting(false)
@@ -146,7 +147,10 @@ export function DataTableToolbar<TData>({
           </AlertDialog>
         )}
       </div>
-      <DataTableViewOptions table={table} />
+      <div className="flex items-center gap-2">
+        {actions}
+        <DataTableViewOptions table={table} />
+      </div>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, status
@@ -6,10 +7,11 @@ from tracecat import config
 from tracecat.api.common import bootstrap_role
 from tracecat.auth.credentials import RoleACL
 from tracecat.auth.enums import AuthType
+from tracecat.auth.types import Role
+from tracecat.authz.enums import OrgRole
 from tracecat.logger import logger
 from tracecat.settings.constants import AUTH_TYPE_TO_SETTING_KEY
 from tracecat.settings.service import get_setting, get_setting_override
-from tracecat.types.auth import Role
 
 WorkspaceUserRole = Annotated[
     Role,
@@ -19,6 +21,39 @@ WorkspaceUserRole = Annotated[
 
 Sets the `ctx_role` context variable.
 """
+
+
+ExecutorWorkspaceRole = Annotated[
+    Role,
+    RoleACL(
+        allow_user=False,
+        allow_service=False,
+        allow_executor=True,
+        require_workspace="yes",
+    ),
+]
+"""Dependency for an executor role for a workspace.
+
+Sets the `ctx_role` context variable.
+"""
+
+ServiceRole = Annotated[
+    Role, RoleACL(allow_user=False, allow_service=True, require_workspace="no")
+]
+"""Dependency for a service role.
+
+Sets the `ctx_role` context variable.
+"""
+
+OrgAdminUser = Annotated[
+    Role,
+    RoleACL(
+        allow_user=True,
+        allow_service=False,
+        require_workspace="no",
+        require_org_roles=[OrgRole.OWNER, OrgRole.ADMIN],
+    ),
+]
 
 
 async def verify_auth_type(auth_type: AuthType) -> None:
@@ -38,6 +73,11 @@ async def verify_auth_type(auth_type: AuthType) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Auth type not allowed",
         )
+
+    # OIDC/Google OAuth/basic availability is platform-configured, not org-setting
+    # controlled.
+    if auth_type in {AuthType.BASIC, AuthType.OIDC, AuthType.GOOGLE_OAUTH}:
+        return
 
     # 2. Check that the setting is enabled
     key = AUTH_TYPE_TO_SETTING_KEY[auth_type]
@@ -76,10 +116,33 @@ def require_auth_type_enabled(auth_type: AuthType) -> Any:
         FastAPI dependency that verifies the auth type
     """
 
-    if auth_type not in AUTH_TYPE_TO_SETTING_KEY:
+    if auth_type not in AUTH_TYPE_TO_SETTING_KEY and auth_type not in {
+        AuthType.BASIC,
+        AuthType.OIDC,
+        AuthType.GOOGLE_OAUTH,
+    }:
         raise ValueError(f"Invalid auth type: {auth_type}")
 
     async def _check_auth_type_enabled() -> None:
         await verify_auth_type(auth_type)
 
     return Depends(_check_auth_type_enabled)
+
+
+def require_any_auth_type_enabled(auth_types: Sequence[AuthType]) -> Any:
+    """FastAPI dependency to allow any one of the provided auth types."""
+    candidate_types = tuple(dict.fromkeys(auth_types))
+    if not candidate_types:
+        raise ValueError("auth_types must not be empty")
+
+    async def _check_any_auth_type_enabled() -> None:
+        for auth_type in candidate_types:
+            if auth_type in config.TRACECAT__AUTH_TYPES:
+                await verify_auth_type(auth_type)
+                return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Auth type not allowed",
+        )
+
+    return Depends(_check_any_auth_type_enabled)

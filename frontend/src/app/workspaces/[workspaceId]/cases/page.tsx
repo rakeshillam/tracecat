@@ -1,22 +1,104 @@
-import type { Metadata } from "next"
-import CaseTable from "@/components/cases/case-table"
-import CasePanelProvider from "@/providers/case-panel"
+"use client"
 
-export const metadata: Metadata = {
-  title: "Cases",
-}
+import { useEffect } from "react"
+import { CasesLayout } from "@/components/cases/cases-layout"
+import { useCases } from "@/hooks/use-cases"
+import { useFeatureFlag } from "@/hooks/use-feature-flags"
+import { useWorkspaceMembers } from "@/hooks/use-workspace"
+import { useCaseDropdownDefinitions, useCaseTagCatalog } from "@/lib/hooks"
+import { useWorkspaceId } from "@/providers/workspace-id"
 
 export default function CasesPage() {
+  const workspaceId = useWorkspaceId()
+
+  const {
+    cases,
+    isLoading,
+    error,
+    filters,
+    refetch,
+    setSearchQuery,
+    setStatusFilter,
+    setStatusMode,
+    setPriorityFilter,
+    setPriorityMode,
+    setPrioritySortDirection,
+    setSeverityFilter,
+    setSeverityMode,
+    setSeveritySortDirection,
+    setAssigneeFilter,
+    setAssigneeMode,
+    setAssigneeSortDirection,
+    setTagFilter,
+    setTagMode,
+    setTagSortDirection,
+    setDropdownFilter,
+    setDropdownMode,
+    setDropdownSortDirection,
+    setUpdatedAfter,
+    setCreatedAfter,
+    setUpdatedAtSort,
+    setLimit,
+    goToNextPage,
+    goToPreviousPage,
+    hasNextPage,
+    hasPreviousPage,
+    currentPage,
+  } = useCases()
+
+  const { members } = useWorkspaceMembers(workspaceId)
+  const { caseTags } = useCaseTagCatalog(workspaceId)
+  const { isFeatureEnabled } = useFeatureFlag()
+  const caseDropdownsEnabled = isFeatureEnabled("case-dropdowns")
+  const { dropdownDefinitions } = useCaseDropdownDefinitions(workspaceId)
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      document.title = "Cases"
+    }
+  }, [])
+
   return (
-    <div className="flex size-full flex-col space-y-4">
-      <div className="flex w-full items-center justify-between">
-        <p className="text-md text-muted-foreground">
-          View your workspace&apos;s cases here.
-        </p>
-      </div>
-      <CasePanelProvider className="h-full overflow-auto sm:w-3/5 sm:max-w-none md:w-3/5 lg:w-4/5 lg:max-w-[1200px]">
-        <CaseTable />
-      </CasePanelProvider>
+    <div className="size-full overflow-hidden">
+      <CasesLayout
+        cases={cases}
+        isLoading={isLoading}
+        error={error}
+        filters={filters}
+        members={members}
+        tags={caseTags}
+        onSearchChange={setSearchQuery}
+        onStatusChange={setStatusFilter}
+        onStatusModeChange={setStatusMode}
+        onPriorityChange={setPriorityFilter}
+        onPriorityModeChange={setPriorityMode}
+        onPrioritySortDirectionChange={setPrioritySortDirection}
+        onSeverityChange={setSeverityFilter}
+        onSeverityModeChange={setSeverityMode}
+        onSeveritySortDirectionChange={setSeveritySortDirection}
+        onAssigneeChange={setAssigneeFilter}
+        onAssigneeModeChange={setAssigneeMode}
+        onAssigneeSortDirectionChange={setAssigneeSortDirection}
+        onTagChange={setTagFilter}
+        onTagModeChange={setTagMode}
+        onTagSortDirectionChange={setTagSortDirection}
+        onUpdatedAfterChange={setUpdatedAfter}
+        onCreatedAfterChange={setCreatedAfter}
+        onUpdatedAtSortChange={setUpdatedAtSort}
+        onLimitChange={setLimit}
+        dropdownDefinitions={
+          caseDropdownsEnabled ? dropdownDefinitions : undefined
+        }
+        onDropdownFilterChange={setDropdownFilter}
+        onDropdownModeChange={setDropdownMode}
+        onDropdownSortDirectionChange={setDropdownSortDirection}
+        onNextPage={goToNextPage}
+        onPreviousPage={goToPreviousPage}
+        hasNextPage={hasNextPage}
+        hasPreviousPage={hasPreviousPage}
+        currentPage={currentPage}
+        refetch={refetch}
+      />
     </div>
   )
 }

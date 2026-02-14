@@ -1,13 +1,13 @@
 from collections.abc import AsyncGenerator
 
 import pytest
-from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from tracecat.db.schemas import Workflow, Workspace
+from tracecat.auth.types import Role
+from tracecat.db.models import Workflow, Workspace
+from tracecat.exceptions import TracecatValidationError
 from tracecat.identifiers.workflow import WorkflowID
-from tracecat.types.auth import Role
-from tracecat.types.exceptions import TracecatValidationError
-from tracecat.workflow.management.folders.models import WorkflowFolderCreate
+from tracecat.workflow.management.folders.schemas import WorkflowFolderCreate
 from tracecat.workflow.management.folders.service import WorkflowFolderService
 
 pytestmark = pytest.mark.usefixtures("db")
@@ -38,13 +38,12 @@ async def workflow_id(
     # Create a test workflow
     workflow = Workflow(
         title="test-workflow",
-        owner_id=svc_workspace.id,
+        workspace_id=svc_workspace.id,
         description="Test workflow for folders testing",
         status="active",
         entrypoint=None,
         returns=None,
-        object=None,
-    )  # type: ignore
+    )
     session.add(workflow)
     await session.commit()
     try:
@@ -69,7 +68,7 @@ class TestWorkflowFolderService:
         )
         assert created_folder.name == folder_create_params.name
         assert created_folder.path == f"/{folder_create_params.name}/"
-        assert created_folder.owner_id == folder_service.workspace_id
+        assert created_folder.workspace_id == folder_service.workspace_id
 
         # Retrieve folder by ID
         retrieved_folder = await folder_service.get_folder(created_folder.id)

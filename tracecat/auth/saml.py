@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tracecat.api.common import bootstrap_role
-from tracecat.auth.credentials import RoleACL
+from tracecat.auth.dependencies import ServiceRole
 from tracecat.auth.users import AuthBackendStrategyDep, UserManagerDep, auth_backend
 from tracecat.config import (
     SAML_ACCEPTED_TIME_DIFF,
@@ -31,15 +31,14 @@ from tracecat.config import (
     SAML_SIGNED_RESPONSES,
     SAML_VERIFY_SSL_ENTITY,
     SAML_VERIFY_SSL_METADATA,
-    TRACECAT__APP_ENV,
+    TRACECAT__EE_MULTI_TENANT,
     TRACECAT__PUBLIC_API_URL,
     XMLSEC_BINARY_PATH,
 )
 from tracecat.db.engine import get_async_session
-from tracecat.db.schemas import SAMLRequestData
+from tracecat.db.models import SAMLRequestData
 from tracecat.logger import logger
 from tracecat.settings.service import get_setting
-from tracecat.types.auth import Role
 
 router = APIRouter(prefix="/auth/saml", tags=["auth"])
 
@@ -210,21 +209,18 @@ def metadata_cert_tempfile(metadata_cert_data: bytes):
 
 
 async def create_saml_client() -> Saml2Client:
-    # Validate HTTPS requirement in production
-    if TRACECAT__APP_ENV == "production":
-        if not SAML_PUBLIC_ACS_URL.startswith("https://"):
-            logger.error("SAML ACS URL must use HTTPS in production environment")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Authentication service misconfigured",
-            )
-
     role = bootstrap_role()
-    saml_idp_metadata_url = await get_setting(
-        "saml_idp_metadata_url",
-        role=role,
-        default=SAML_IDP_METADATA_URL,
-    )
+
+    # In single-tenant mode, prefer explicit environment configuration over
+    # encrypted DB settings to support self-hosted deployments and safe fallback.
+    if not TRACECAT__EE_MULTI_TENANT and SAML_IDP_METADATA_URL:
+        saml_idp_metadata_url = SAML_IDP_METADATA_URL
+    else:
+        saml_idp_metadata_url = await get_setting(
+            "saml_idp_metadata_url",
+            role=role,
+            default=SAML_IDP_METADATA_URL,
+        )
     if not saml_idp_metadata_url:
         logger.error("SAML SSO metadata URL has not been configured")
         raise HTTPException(
@@ -244,6 +240,7 @@ async def create_saml_client() -> Saml2Client:
         "entityid": TRACECAT__PUBLIC_API_URL,
         "xmlsec_binary": XMLSEC_BINARY_PATH,
         "verify_ssl_cert": SAML_VERIFY_SSL_ENTITY,
+        "disable_ssl_certificate_validation": not SAML_VERIFY_SSL_METADATA,
         "service": {
             "sp": {
                 "name": "tracecat_saml_sp",
@@ -268,7 +265,6 @@ async def create_saml_client() -> Saml2Client:
             "remote": [
                 {
                     "url": saml_idp_metadata_url,
-                    "disable_ssl_certificate_validation": not SAML_VERIFY_SSL_METADATA,
                 }
             ]
         },
@@ -403,9 +399,7 @@ async def sso_acs(
     strategy: AuthBackendStrategyDep,
     client: Annotated[Saml2Client, Depends(create_saml_client)],
     db_session: Annotated[AsyncSession, Depends(get_async_session)],
-    role: Annotated[
-        Role, RoleACL(allow_user=False, allow_service=True, require_workspace="no")
-    ],
+    role: ServiceRole,
 ) -> Response:
     """Handle the SAML SSO response from the IdP post-authentication."""
 

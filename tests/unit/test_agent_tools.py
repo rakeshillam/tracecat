@@ -1,287 +1,330 @@
-"""Tests for agent tools implementations after secure refactor."""
+"""Unit tests for agent tools module.
 
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
+Tests the harness-agnostic tool creation and execution:
+- Tool dataclass construction
+- ToolExecutionError exception
+- denormalize_tool_name utility
+- _extract_action_metadata for UDFs and templates
+- create_tool_from_registry
+"""
 
 import pytest
-from tracecat_registry.integrations.agents.tools import create_secure_file_tools
+from pydantic import BaseModel, Field, TypeAdapter
+
+from tracecat.agent.tools import (
+    ToolExecutionError,
+    _extract_action_metadata,
+    denormalize_tool_name,
+)
+from tracecat.agent.types import Tool
+from tracecat.expressions.expectations import ExpectedField
+from tracecat.registry.actions.bound import BoundRegistryAction
+from tracecat.registry.actions.schemas import (
+    ActionStep,
+    TemplateAction,
+    TemplateActionDefinition,
+)
+from tracecat.registry.repository import Repository
 
 
-@pytest.fixture()
-def secure_tools():
-    """Provision a fresh, isolated set of secure tool functions for each test."""
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tools_dict = {t.name: t.function for t in create_secure_file_tools(tmpdir)}
-        tmp_path = Path(tmpdir)
-        yield tools_dict, tmp_path
+class SampleArgs(BaseModel):
+    foo: int = Field(..., description="Foo argument")
 
 
-class TestReadFile:
-    def test_read_file_success(self, secure_tools):
-        """Read a small text file successfully."""
+def sample_udf(foo: int) -> int:
+    return foo
 
-        tools, tmp_path = secure_tools
-        file_path = tmp_path / "sample.txt"
-        content = "Line 1\nLine 2\nLine 3"
-        file_path.write_text(content)
 
-        result = tools["read_file"](str(file_path.relative_to(tmp_path)))
-
-        assert result == content
-
-    def test_read_file_limit_250_lines(self, secure_tools):
-        """Ensure only the first 250 lines are returned."""
-
-        tools, tmp_path = secure_tools
-        file_path = tmp_path / "many_lines.txt"
-        lines = [f"Line {i}" for i in range(300)]
-        file_path.write_text("\n".join(lines))
-
-        result = tools["read_file"](str(file_path.relative_to(tmp_path)))
-        result_lines = result.split("\n")
-
-        assert len(result_lines) == 250
-        assert result_lines[0] == "Line 0"
-        assert result_lines[249] == "Line 249"
-
-    def test_read_file_nonexistent(self, secure_tools):
-        """Reading a missing file raises an error."""
-
-        tools, _ = secure_tools
-        with pytest.raises(ValueError, match="Path does not exist"):
-            tools["read_file"]("missing.txt")
-
-    def test_read_file_directory(self, secure_tools):
-        """Attempting to read a directory should fail."""
-
-        tools, tmp_path = secure_tools
-        dir_path = tmp_path / "somedir"
-        dir_path.mkdir()
-
-        with pytest.raises(ValueError, match="Path is not a file"):
-            tools["read_file"](str(dir_path.relative_to(tmp_path)))
-
-    @patch(
-        "tracecat_registry.integrations.agents.tools.TRACECAT__MAX_FILE_SIZE_BYTES", 10
+def build_udf_action(
+    description: str = "Sample UDF description",
+) -> BoundRegistryAction:
+    """Build a UDF action for testing."""
+    repo = Repository()
+    repo.register_udf(
+        fn=sample_udf,
+        name="sample_udf",
+        type="udf",
+        namespace="test",
+        description=description,
+        secrets=None,
+        args_cls=SampleArgs,
+        args_docs={"foo": "Foo argument"},
+        rtype=int,
+        rtype_adapter=TypeAdapter(int),
+        default_title=None,
+        display_group=None,
+        doc_url=None,
+        author="Tracecat",
+        deprecated=None,
+        include_in_schema=True,
     )
-    def test_read_file_too_large(self, secure_tools):
-        """Reading a file larger than the configured limit should fail."""
-
-        tools, tmp_path = secure_tools
-        file_path = tmp_path / "large.txt"
-        file_path.write_text("This content is longer than 10 bytes")
-
-        with pytest.raises(ValueError, match="File too large"):
-            tools["read_file"](str(file_path.relative_to(tmp_path)))
+    return repo.get("test.sample_udf")
 
 
-class TestCreateFile:
-    def test_create_file_success(self, secure_tools):
-        tools, tmp_path = secure_tools
-        rel_path = "test_file.txt"
-        content = "Test content"
-
-        result = tools["create_file"](rel_path, content)
-
-        assert "File created successfully" in result
-        full_path = tmp_path / rel_path
-        assert full_path.exists() and full_path.read_text() == content
-
-    def test_create_file_empty_content(self, secure_tools):
-        tools, tmp_path = secure_tools
-        rel_path = "empty_file.txt"
-
-        result = tools["create_file"](rel_path)
-
-        assert "File created successfully" in result
-        assert (tmp_path / rel_path).read_text() == ""
-
-    def test_create_file_with_parent_dirs(self, secure_tools):
-        tools, tmp_path = secure_tools
-        rel_path = "subdir/test_file.txt"
-        content = "Test content"
-
-        result = tools["create_file"](rel_path, content)
-
-        assert "File created successfully" in result
-        full_path = tmp_path / rel_path
-        assert full_path.exists() and full_path.read_text() == content
-
-    def test_create_file_already_exists(self, secure_tools):
-        tools, tmp_path = secure_tools
-        rel_path = "exists.txt"
-
-        # Pre-create the file
-        (tmp_path / rel_path).write_text("original")
-
-        with pytest.raises(ValueError, match="File already exists"):
-            tools["create_file"](rel_path, "content")
-
-    @patch(
-        "tracecat_registry.integrations.agents.tools.TRACECAT__MAX_FILE_SIZE_BYTES", 10
+def build_template_action(
+    *,
+    template_description: str = "Template action description",
+    expects_override: dict[str, ExpectedField] | None = None,
+) -> BoundRegistryAction:
+    """Build a template action for testing."""
+    repo = Repository()
+    expects = expects_override or {
+        "user_id": ExpectedField(type="int", description="User identifier"),
+        "message": ExpectedField(type="str", description="Message to send"),
+    }
+    template_def = TemplateActionDefinition(
+        name="send_message",
+        namespace="templates",
+        title="Send Message",
+        description=template_description,
+        display_group="Messaging",
+        doc_url="https://example.com",
+        author="Tracecat",
+        deprecated=None,
+        secrets=None,
+        expects=expects,
+        steps=[
+            ActionStep(
+                ref="first",
+                action="test.sample_udf",
+                args={"foo": 1},
+            )
+        ],
+        returns="result",
     )
-    def test_create_file_content_too_large(self, secure_tools):
-        tools, _ = secure_tools
-        rel_path = "too_large.txt"
-        content = "This content is longer than 10 bytes"
-
-        with pytest.raises(ValueError, match="Content too large"):
-            tools["create_file"](rel_path, content)
-
-
-class TestSearchFiles:
-    def test_search_files_exact_match(self, secure_tools):
-        tools, tmp_path = secure_tools
-
-        (tmp_path / "test_file.txt").touch()
-        (tmp_path / "another_file.py").touch()
-        (tmp_path / "test_script.py").touch()
-
-        results = tools["search_files"]("test_file.txt")
-
-        assert any(result == "test_file.txt" for result in results)
-
-    def test_search_files_fuzzy_match(self, secure_tools):
-        tools, tmp_path = secure_tools
-
-        (tmp_path / "test_file.txt").touch()
-        (tmp_path / "testing_script.py").touch()
-        (tmp_path / "unrelated.md").touch()
-
-        results = tools["search_files"]("test")
-
-        assert results
-        assert any("test" in Path(r).name.lower() for r in results)
-
-    def test_search_files_max_results(self, secure_tools):
-        tools, tmp_path = secure_tools
-
-        for i in range(20):
-            (tmp_path / f"test_file_{i}.txt").touch()
-
-        results = tools["search_files"]("test", max_results=5)
-
-        assert len(results) <= 5
-
-    def test_search_files_empty_query(self, secure_tools):
-        tools, _ = secure_tools
-        with pytest.raises(ValueError, match="Search query must be a non-empty string"):
-            tools["search_files"]("")
-
-    def test_search_files_query_too_long(self, secure_tools):
-        long_query = "a" * 101
-        tools, _ = secure_tools
-        with pytest.raises(ValueError, match="Search query too long"):
-            tools["search_files"](long_query)
+    template_action = TemplateAction(type="action", definition=template_def)
+    repo.register_udf(
+        fn=sample_udf,
+        name="sample_udf",
+        type="udf",
+        namespace="test",
+        description="Sample UDF description",
+        secrets=None,
+        args_cls=SampleArgs,
+        args_docs={"foo": "Foo argument"},
+        rtype=int,
+        rtype_adapter=TypeAdapter(int),
+        default_title=None,
+        display_group=None,
+        doc_url=None,
+        author="Tracecat",
+        deprecated=None,
+        include_in_schema=True,
+    )
+    repo.register_template_action(template_action)
+    return repo.get("templates.send_message")
 
 
-class TestListDirectory:
-    def test_list_directory_success(self, secure_tools):
-        tools, tmp_path = secure_tools
-
-        (tmp_path / "file1.txt").touch()
-        (tmp_path / "file2.py").touch()
-        (tmp_path / "subdir").mkdir()
-
-        results = tools["list_directory"]()
-
-        assert len(results) == 3
-        file_entries = [e for e in results if e.startswith("[FILE]")]
-        dir_entries = [e for e in results if e.startswith("[DIR]")]
-
-        assert len(file_entries) == 2
-        assert len(dir_entries) == 1
-        assert any("file1.txt" in e for e in file_entries)
-        assert any("file2.py" in e for e in file_entries)
-        assert any("subdir" in e for e in dir_entries)
-
-    def test_list_directory_empty(self, secure_tools):
-        tools, _ = secure_tools
-        results = tools["list_directory"]()
-        assert results == []
+# =============================================================================
+# Tool Dataclass Tests
+# =============================================================================
 
 
-class TestFindAndReplace:
-    def test_find_and_replace_success(self, secure_tools):
-        tools, tmp_path = secure_tools
-        file_path = tmp_path / "greetings.txt"
-        original = "Hello world\nHello universe\nGoodbye world"
-        file_path.write_text(original)
+class TestToolDataclass:
+    """Tests for the harness-agnostic Tool dataclass."""
 
-        result = tools["find_and_replace"]("greetings.txt", r"Hello", "Hi")
-
-        expected = "Hi world\nHi universe\nGoodbye world"
-        assert result == expected
-        assert file_path.read_text() == expected
-
-    def test_find_and_replace_regex_pattern(self, secure_tools):
-        tools, tmp_path = secure_tools
-        file_path = tmp_path / "phones.txt"
-        original = "Phone: 123-456-7890\nPhone: 987-654-3210"
-        file_path.write_text(original)
-
-        result = tools["find_and_replace"](
-            "phones.txt", r"Phone: (\d{3}-\d{3}-\d{4})", r"Tel: \1"
+    def test_tool_creation_with_required_fields(self):
+        """Test Tool creation with required fields."""
+        tool = Tool(
+            name="core.http_request",
+            description="Make an HTTP request",
+            parameters_json_schema={"type": "object", "properties": {}},
         )
 
-        expected = "Tel: 123-456-7890\nTel: 987-654-3210"
-        assert result == expected
+        assert tool.name == "core.http_request"
+        assert tool.description == "Make an HTTP request"
+        assert tool.parameters_json_schema == {"type": "object", "properties": {}}
+        assert tool.requires_approval is False
 
-    def test_find_and_replace_no_matches(self, secure_tools):
-        tools, tmp_path = secure_tools
-        file_path = tmp_path / "no_match.txt"
-        original = "Hello world"
-        file_path.write_text(original)
-
-        result = tools["find_and_replace"]("no_match.txt", r"xyz", "abc")
-
-        assert result == original
-
-    def test_find_and_replace_nonexistent_file(self, secure_tools):
-        tools, _ = secure_tools
-        with pytest.raises(ValueError, match="Path does not exist"):
-            tools["find_and_replace"]("missing.txt", "pattern", "replacement")
-
-    def test_find_and_replace_empty_pattern(self, secure_tools):
-        tools, tmp_path = secure_tools
-        (tmp_path / "file.txt").write_text("content")
-
-        with pytest.raises(ValueError, match="Pattern must be a non-empty string"):
-            tools["find_and_replace"]("file.txt", "", "replacement")
-
-    def test_find_and_replace_invalid_regex(self, secure_tools):
-        tools, tmp_path = secure_tools
-        (tmp_path / "file.txt").write_text("content")
-
-        with pytest.raises(ValueError, match="Invalid regex pattern"):
-            tools["find_and_replace"]("file.txt", "[", "replacement")
-
-    def test_find_and_replace_pattern_too_long(self, secure_tools):
-        tools, tmp_path = secure_tools
-        (tmp_path / "file.txt").write_text("content")
-
-        long_pattern = "a" * 1001
-        with pytest.raises(ValueError, match="Pattern too long"):
-            tools["find_and_replace"]("file.txt", long_pattern, "replacement")
-
-
-class TestApplyPythonLambda:
-    def test_apply_python_lambda_success(self, secure_tools):
-        tools, _ = secure_tools
-        result = tools["apply_python_lambda"]("5", "lambda x: int(x) * 2")
-        assert result == 10
-
-    def test_apply_python_lambda_string_operation(self, secure_tools):
-        tools, _ = secure_tools
-        result = tools["apply_python_lambda"]("hello", "lambda x: x.upper()")
-        assert result == "HELLO"
-
-    def test_apply_python_lambda_complex_operation(self, secure_tools):
-        tools, _ = secure_tools
-        result = tools["apply_python_lambda"](
-            "hello world",
-            "lambda x: ' '.join(word.capitalize() for word in x.split())",
+    def test_tool_creation_with_approval(self):
+        """Test Tool creation with requires_approval=True."""
+        tool = Tool(
+            name="core.cases.delete_case",
+            description="Delete a case permanently",
+            parameters_json_schema={"type": "object"},
+            requires_approval=True,
         )
-        assert result == "Hello World"
+
+        assert tool.name == "core.cases.delete_case"
+        assert tool.requires_approval is True
+
+    def test_tool_uses_canonical_name_with_dots(self):
+        """Test that Tool stores canonical names with dots (not underscores)."""
+        tool = Tool(
+            name="tools.slack.post_message",
+            description="Post a message to Slack",
+            parameters_json_schema={},
+        )
+
+        assert "." in tool.name
+        assert "__" not in tool.name
+
+    def test_tool_with_complex_schema(self):
+        """Test Tool with a complex JSON schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to request"},
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "DELETE"],
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            },
+            "required": ["url", "method"],
+        }
+
+        tool = Tool(
+            name="core.http_request",
+            description="Make an HTTP request",
+            parameters_json_schema=schema,
+        )
+
+        assert tool.parameters_json_schema == schema
+        assert "required" in tool.parameters_json_schema
+
+
+# =============================================================================
+# ToolExecutionError Tests
+# =============================================================================
+
+
+class TestToolExecutionError:
+    """Tests for ToolExecutionError exception."""
+
+    def test_error_with_message(self):
+        """Test ToolExecutionError with a message."""
+        error = ToolExecutionError("Action execution failed: timeout")
+
+        assert str(error) == "Action execution failed: timeout"
+        assert isinstance(error, Exception)
+
+    def test_error_can_be_raised_and_caught(self):
+        """Test that ToolExecutionError can be raised and caught."""
+        with pytest.raises(ToolExecutionError) as exc_info:
+            raise ToolExecutionError("Something went wrong")
+
+        assert "Something went wrong" in str(exc_info.value)
+
+    def test_error_inheritance(self):
+        """Test that ToolExecutionError inherits from Exception."""
+        error = ToolExecutionError("test")
+        assert isinstance(error, Exception)
+
+
+# =============================================================================
+# denormalize_tool_name Tests
+# =============================================================================
+
+
+class TestDenormalizeToolName:
+    """Tests for denormalize_tool_name utility."""
+
+    def test_converts_double_underscores_to_dots(self):
+        """Test conversion of MCP format to canonical format."""
+        result = denormalize_tool_name("core__http_request")
+        assert result == "core.http_request"
+
+    def test_handles_multiple_namespaces(self):
+        """Test conversion with multiple namespace levels."""
+        result = denormalize_tool_name("tools__slack__post_message")
+        assert result == "tools.slack.post_message"
+
+    def test_handles_canonical_name_unchanged(self):
+        """Test that canonical names without __ pass through."""
+        result = denormalize_tool_name("core.http_request")
+        assert result == "core.http_request"
+
+    def test_preserves_single_underscores(self):
+        """Test that single underscores are preserved."""
+        result = denormalize_tool_name("core__http_request")
+        assert result == "core.http_request"
+        # The action name part still has underscore
+        assert "_" in result
+
+    def test_complex_nested_namespace(self):
+        """Test deeply nested namespaces."""
+        result = denormalize_tool_name("tools__integrations__aws__s3__list_buckets")
+        assert result == "tools.integrations.aws.s3.list_buckets"
+
+
+# =============================================================================
+# _extract_action_metadata Tests
+# =============================================================================
+
+
+class TestExtractActionMetadata:
+    """Tests for _extract_action_metadata helper."""
+
+    def test_udf_returns_description_and_args_model(self):
+        """Test UDF extraction returns description and args class."""
+        bound_action = build_udf_action()
+        description, model_cls = _extract_action_metadata(bound_action)
+
+        assert description == "Sample UDF description"
+        assert model_cls is SampleArgs
+
+    def test_template_uses_template_description(self):
+        """Test template action uses template definition description."""
+        bound_action = build_template_action()
+        description, model_cls = _extract_action_metadata(bound_action)
+
+        assert description == "Template action description"
+        assert issubclass(model_cls, BaseModel)
+        assert set(model_cls.model_fields) == {"user_id", "message"}
+        assert model_cls.model_fields["user_id"].annotation is int
+
+    def test_template_falls_back_to_bound_description(self):
+        """Test template falls back to bound action description when template is empty."""
+        bound_action = build_template_action(template_description="")
+        bound_action.description = "Fallback description"
+        assert bound_action.template_action is not None
+        bound_action.template_action.definition.description = ""
+
+        description, _ = _extract_action_metadata(bound_action)
+        assert description == "Fallback description"
+
+    def test_template_without_template_action_raises(self):
+        """Test that template type without template_action raises ValueError."""
+        bound_action = BoundRegistryAction(
+            fn=sample_udf,
+            name="template_without_body",
+            namespace="tests",
+            description="Template missing body",
+            type="template",
+            origin="unit-test",
+            secrets=None,
+            args_cls=SampleArgs,
+            args_docs={"foo": "Foo argument"},
+            rtype_cls=int,
+            rtype_adapter=TypeAdapter(int),
+            default_title=None,
+            display_group=None,
+            doc_url=None,
+            author="Tracecat",
+            deprecated=None,
+            template_action=None,
+            include_in_schema=True,
+        )
+
+        with pytest.raises(ValueError, match="Template action is not set"):
+            _extract_action_metadata(bound_action)
+
+    def test_template_generates_model_from_expects(self):
+        """Test that template expects are converted to a Pydantic model."""
+        expects = {
+            "name": ExpectedField(type="str", description="User name"),
+            "age": ExpectedField(type="int", description="User age"),
+            "active": ExpectedField(type="bool", description="Is active"),
+        }
+        bound_action = build_template_action(expects_override=expects)
+
+        _, model_cls = _extract_action_metadata(bound_action)
+
+        assert set(model_cls.model_fields) == {"name", "age", "active"}
+        assert model_cls.model_fields["name"].annotation is str
+        assert model_cls.model_fields["age"].annotation is int
+        assert model_cls.model_fields["active"].annotation is bool

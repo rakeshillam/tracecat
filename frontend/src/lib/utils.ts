@@ -1,10 +1,24 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
-import YAML from "yaml"
+import type { IntegrationOAuthCallback } from "@/client"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
+
+// Linear-style design tokens
+export const linearStyles = {
+  input: {
+    base: "h-7 border-0 bg-transparent px-2 py-1 text-xs transition-colors",
+    interactive:
+      "hover:bg-muted/50 focus:bg-muted/70 focus:outline-none focus:ring-0 focus-visible:ring-0",
+    full: "h-7 border-0 bg-transparent px-2 py-1 text-xs hover:bg-muted/50 focus:bg-muted/70 focus:outline-none focus:ring-0 focus-visible:ring-0 transition-colors",
+  },
+  trigger: {
+    base: "w-auto border-none shadow-none px-1.5 py-0.5 h-auto bg-transparent rounded focus:ring-0 text-xs [&>svg]:hidden transition-colors duration-150",
+    hover: "hover:bg-muted/50",
+  },
+} as const
 export const copyToClipboard = async ({
   target,
   message,
@@ -36,18 +50,30 @@ export const copyToClipboard = async ({
   }
 }
 
-export function slugify(value: string, delimiter: string = "_"): string {
-  return value
-    .normalize("NFD")
+export function slugify(value: string, delimiter: string = "-"): string {
+  const normalized = value
+    .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
+    .replace(/[^\x00-\x7F]/g, "") // Drop non-ASCII remnants
     .toLowerCase()
     .trim()
-    .replace(/['`]/g, "_") // Replace quotes and apostrophes with underscore
-    .replace(/[^a-z0-9_ ]/g, "") // Remove other special chars except underscore
-    .replace(/\s+/g, delimiter) // Replace spaces with delimiter
+
+  const escapedDelimiter = delimiter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const trimEdges = new RegExp(`^${escapedDelimiter}|${escapedDelimiter}$`, "g")
+
+  return normalized
+    .replace(/[^\w\s-]/g, "") // Remove non-word, non-space, non-hyphen characters
+    .replace(/[-\s]+/g, delimiter) // Collapse whitespace and hyphens into the delimiter
+    .replace(trimEdges, "") // Trim delimiters from ends
 }
 
-export function undoSlugify(value: string, delimiter: string = "_"): string {
+export const ACTION_REF_DELIMITER = "_"
+
+export function slugifyActionRef(value: string): string {
+  return slugify(value, ACTION_REF_DELIMITER)
+}
+
+export function undoSlugify(value: string, delimiter: string = "-"): string {
   return value
     .replace(new RegExp(delimiter, "g"), " ")
     .replace(/\b\w/g, (l) => l.toUpperCase())
@@ -55,17 +81,6 @@ export function undoSlugify(value: string, delimiter: string = "_"): string {
 
 export function isServer() {
   return typeof window === "undefined"
-}
-
-export function isEmptyObjectOrNullish(value: unknown) {
-  return value === null || value === undefined || isEmptyObject(value)
-}
-export function isEmptyObject(obj: object) {
-  return typeof obj === "object" && Object.keys(obj).length === 0
-}
-
-export function itemOrEmptyString(item: unknown | undefined) {
-  return isEmptyObjectOrNullish(item) ? "" : YAML.stringify(item)
 }
 
 export function capitalizeFirst(str: string) {
@@ -107,4 +122,16 @@ export function shortTimeAgo(date: Date) {
  */
 export function reconstructActionType(type: string) {
   return type.replaceAll("__", ".")
+}
+
+export function isIntegrationOAuthCallback(
+  obj: unknown
+): obj is IntegrationOAuthCallback {
+  return (
+    typeof obj === "object" &&
+    obj !== null &&
+    "status" in obj &&
+    "provider_id" in obj &&
+    "redirect_url" in obj
+  )
 }

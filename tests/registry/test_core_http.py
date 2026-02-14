@@ -6,14 +6,18 @@ import httpx
 import pytest
 import respx
 from tenacity import RetryError
+from tracecat_registry._internal.exceptions import TracecatException
 from tracecat_registry.core.http import (
     FileUploadData,
+    http_paginate,
     http_poll,
     http_request,
     httpx_to_response,
 )
 
-from tracecat.types.exceptions import TracecatException
+from tracecat.expressions.functions import str_to_b64
+
+PNG_URL = "https://urlscan.io/screenshots/019aa89e-05c5-714d-80ea-83fbeb06a500.png"
 
 
 # Test fixtures
@@ -44,6 +48,15 @@ def mock_no_content_response() -> httpx.Response:
         status_code=204,
         headers={},
     )
+
+
+@pytest.fixture
+async def urlscan_png_bytes() -> bytes:
+    """Fetch the live PNG used for corruption regression tests."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(PNG_URL)
+        response.raise_for_status()
+        return response.content
 
 
 # Test helper functions
@@ -261,6 +274,45 @@ async def test_http_request_bad_request() -> None:
     assert "Invalid parameters" in value
 
 
+@pytest.mark.anyio
+@pytest.mark.integration
+async def test_http_request_png_corruption_integration(
+    urlscan_png_bytes: bytes,
+) -> None:
+    """Reproduce corruption when PNG bytes are coerced into text then base64 encoded."""
+    response = await http_request(
+        url=PNG_URL,
+        method="GET",
+    )
+
+    assert response["status_code"] == 200
+    assert isinstance(response["data"], str)
+
+    corrupted_b64 = str_to_b64(response["data"])
+    expected_b64 = base64.b64encode(urlscan_png_bytes).decode()
+
+    # Text decoding the PNG changes the payload, so the downstream base64 differs
+    assert corrupted_b64 != expected_b64
+    assert base64.b64decode(corrupted_b64) != urlscan_png_bytes
+
+
+@pytest.mark.anyio
+@pytest.mark.integration
+async def test_http_request_png_base64_encode_data_integration(
+    urlscan_png_bytes: bytes,
+) -> None:
+    """Ensure base64_encode_data returns a lossless base64 string for binary downloads."""
+    response = await http_request(
+        url=PNG_URL,
+        method="GET",
+        base64_encode_data=True,
+    )
+
+    assert response["status_code"] == 200
+    assert isinstance(response["data"], str)
+    assert base64.b64decode(response["data"]) == urlscan_png_bytes
+
+
 # Test HTTP polling function
 @pytest.mark.anyio
 @respx.mock
@@ -319,7 +371,7 @@ async def test_http_poll_condition() -> None:
     result = await http_poll(
         url="https://api.example.com",
         method="GET",
-        poll_condition="lambda x: x['data']['status'] == 'pending'",
+        poll_condition="lambda x: x['data']['status'] == 'completed'",
         poll_interval=0.1,
         poll_max_attempts=3,
     )
@@ -358,8 +410,8 @@ async def test_http_poll_jsonpath_condition() -> None:
     result = await http_poll(
         url="https://api.example.com",
         method="GET",
-        # Retry while status.state is 'pending'
-        poll_condition="lambda x: jsonpath('$.data.status.state', x) == 'pending'",
+        # Poll until status.state is 'completed'
+        poll_condition="lambda x: x['data']['status']['state'] == 'completed'",
         poll_interval=0.1,
         poll_max_attempts=3,
     )
@@ -397,7 +449,8 @@ async def test_http_poll_max_attempts_exceeded() -> None:
 async def test_http_poll_invalid_params() -> None:
     """Test HTTP polling with invalid parameters."""
     with pytest.raises(
-        ValueError, match="At least one of retry_codes or predicate must be specified"
+        ValueError,
+        match="At least one of poll_condition or poll_retry_codes must be specified",
     ):
         await http_poll(
             url="https://api.example.com",
@@ -505,7 +558,7 @@ async def test_http_poll_complex_condition() -> None:
     result = await http_poll(
         url="https://api.example.com",
         method="GET",
-        poll_condition="lambda x: x['headers'].get('x-status') == 'pending'",
+        poll_condition="lambda x: x['headers'].get('x-status') == 'completed'",
         poll_interval=0.1,
         poll_max_attempts=3,
     )
@@ -860,3 +913,658 @@ async def test_http_request_file_upload_aggregate_size_exceeded() -> None:
     pytest.skip(
         "Cannot test aggregate size limit with current config: individual limit (20MB) * max files (5) = 100MB which equals aggregate limit (100MB). Need individual limit > 20MB or aggregate limit < 100MB to test this scenario."
     )
+
+
+# Test HTTP paginate function
+@pytest.fixture
+def pagination_scenarios():
+    """Fixture providing different pagination scenarios for testing."""
+    return {
+        "cursor_in_body": {
+            "responses": [
+                httpx.Response(
+                    status_code=200,
+                    json={
+                        "items": [{"id": 1}, {"id": 2}],
+                        "cursor": "https://api.example.com/resources?cursor=page2",
+                    },
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={
+                        "items": [{"id": 3}, {"id": 4}],
+                        "cursor": "https://api.example.com/resources?cursor=page3",
+                    },
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={"items": [{"id": 5}], "cursor": None},
+                ),
+            ],
+            "stop_condition": "lambda x: x['data'].get('cursor') is None",
+            "next_request": "lambda x: {'url': x['data'].get('cursor')}",
+            "items_jsonpath": "$.items",
+            "expected_items": [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}],
+        },
+        "offset_total": {
+            "responses": [
+                httpx.Response(
+                    status_code=200,
+                    json={
+                        "items": [{"id": 101}, {"id": 102}],
+                        "offset": 0,
+                        "limit": 2,
+                        "total": 5,
+                    },
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={
+                        "items": [{"id": 103}, {"id": 104}],
+                        "offset": 2,
+                        "limit": 2,
+                        "total": 5,
+                    },
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={"items": [{"id": 105}], "offset": 4, "limit": 2, "total": 5},
+                ),
+            ],
+            "stop_condition": "lambda x: (x['data'].get('offset', 0) + x['data'].get('limit', 0)) >= x['data'].get('total', 0)",
+            "next_request": "lambda x: {'params': {'offset': x['data'].get('offset', 0) + x['data'].get('limit', 0)}}",
+            "items_jsonpath": "$.items",
+            "expected_items": [
+                {"id": 101},
+                {"id": 102},
+                {"id": 103},
+                {"id": 104},
+                {"id": 105},
+            ],
+        },
+        "next_page_token": {
+            "responses": [
+                httpx.Response(
+                    status_code=200,
+                    json={
+                        "items": [{"id": "a"}, {"id": "b"}],
+                        "nextPageToken": "token-page2",
+                    },
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={
+                        "items": [{"id": "c"}, {"id": "d"}],
+                        "nextPageToken": "token-page3",
+                    },
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={"items": [{"id": "e"}], "nextPageToken": None},
+                ),
+            ],
+            "stop_condition": "lambda x: not x['data'].get('nextPageToken')",
+            "next_request": "lambda x: {'params': {'pageToken': x['data'].get('nextPageToken')}}",
+            "items_jsonpath": "$.items",
+            "expected_items": [
+                {"id": "a"},
+                {"id": "b"},
+                {"id": "c"},
+                {"id": "d"},
+                {"id": "e"},
+            ],
+        },
+        "link_header": {
+            "responses": [
+                httpx.Response(
+                    status_code=200,
+                    headers={
+                        "Link": '<https://api.example.com/resources?page=2>; rel="next", <https://api.example.com/resources?page=10>; rel="last"'
+                    },
+                    json={"items": [{"id": 1}, {"id": 2}]},
+                ),
+                httpx.Response(
+                    status_code=200,
+                    headers={
+                        "Link": '<https://api.example.com/resources?page=3>; rel="next", <https://api.example.com/resources?page=10>; rel="last"'
+                    },
+                    json={"items": [{"id": 3}, {"id": 4}]},
+                ),
+                httpx.Response(
+                    status_code=200,
+                    headers={
+                        "Link": '<https://api.example.com/resources?page=10>; rel="last"'
+                    },
+                    json={"items": [{"id": 5}]},
+                ),
+            ],
+            "stop_condition": "lambda x: 'link' not in {k.lower(): v for k, v in x['headers'].items()} or 'rel=\"next\"' not in {k.lower(): v for k, v in x['headers'].items()}['link']",
+            "next_request": "lambda x: {'url': [p.split(';')[0].strip('<> ') for p in {k.lower(): v for k, v in x['headers'].items()}['link'].split(',') if 'rel=\"next\"' in p][0]}",
+            "items_jsonpath": "$.items",
+            "expected_items": [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}],
+        },
+        "header_cursor": {
+            "responses": [
+                httpx.Response(
+                    status_code=200,
+                    headers={"x-next-cursor": "cursor-page2"},
+                    json={"items": [{"id": 1}], "count": 1},
+                ),
+                httpx.Response(
+                    status_code=200,
+                    headers={"x-next-cursor": "cursor-page3"},
+                    json={"items": [{"id": 2}], "count": 1},
+                ),
+                httpx.Response(
+                    status_code=200,
+                    headers={},  # No x-next-cursor header
+                    json={"items": [{"id": 3}], "count": 1},
+                ),
+            ],
+            "stop_condition": "lambda x: not x['headers'].get('x-next-cursor')",
+            "next_request": "lambda x: {'params': {'cursor': x['headers'].get('x-next-cursor')}}",
+            "items_jsonpath": "$.items",
+            "expected_items": [{"id": 1}, {"id": 2}, {"id": 3}],
+        },
+        "empty_items_stop": {
+            "responses": [
+                httpx.Response(
+                    status_code=200,
+                    json={"items": [{"id": 1}, {"id": 2}], "page": 1},
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={"items": [{"id": 3}], "page": 2},
+                ),
+                httpx.Response(
+                    status_code=200,
+                    json={"items": [], "page": 3},  # Empty items stops pagination
+                ),
+            ],
+            "stop_condition": "lambda x: not x['data'].get('items')",
+            "next_request": "lambda x: {'params': {'page': (x['data'].get('page', 1) + 1)}}",
+            "items_jsonpath": "$.items",
+            "expected_items": [{"id": 1}, {"id": 2}, {"id": 3}],
+        },
+    }
+
+
+@pytest.mark.anyio
+@respx.mock
+@pytest.mark.parametrize(
+    "scenario_name",
+    [
+        "cursor_in_body",
+        "offset_total",
+        "next_page_token",
+        "link_header",
+        "header_cursor",
+        "empty_items_stop",
+    ],
+)
+async def test_http_paginate_patterns(pagination_scenarios, scenario_name) -> None:
+    """Test various pagination patterns using parameterized scenarios."""
+    scenario = pagination_scenarios[scenario_name]
+
+    # Mock the API responses
+    route = respx.get("https://api.example.com/resources").mock(
+        side_effect=scenario["responses"]
+    )
+
+    # Call http_paginate with scenario-specific parameters
+    result = await http_paginate(
+        url="https://api.example.com/resources",
+        method="GET",
+        stop_condition=scenario["stop_condition"],
+        next_request=scenario["next_request"],
+        items_jsonpath=scenario["items_jsonpath"],
+        limit=1000,
+    )
+
+    # Verify correct number of requests
+    assert route.call_count == len(scenario["responses"])
+
+    # Verify results match expected items (flattened across pages)
+    assert isinstance(result, list)
+    assert result == scenario["expected_items"]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_without_jsonpath() -> None:
+    """Test pagination without items_jsonpath returns per-page HTTPResponse objects."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"data": "page1", "hasMore": True},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"data": "page2", "hasMore": True},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"data": "page3", "hasMore": False},
+        ),
+    ]
+
+    route = respx.get("https://api.example.com/data").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/data",
+        method="GET",
+        stop_condition="lambda x: not x['data'].get('hasMore')",
+        next_request="lambda x: {'url': 'https://api.example.com/data'}",
+        items_jsonpath=None,  # No JSONPath extraction
+        limit=1000,
+    )
+
+    assert route.call_count == 3
+    assert len(result) == 3
+    assert result[0]["data"] == {"data": "page1", "hasMore": True}
+    assert result[1]["data"] == {"data": "page2", "hasMore": True}
+    assert result[2]["data"] == {"data": "page3", "hasMore": False}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_with_dollar_jsonpath() -> None:
+    """Test pagination using $ as JSONPath to get entire response data."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"data": "page1", "hasMore": True},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"data": "page2", "hasMore": True},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"data": "page3", "hasMore": False},
+        ),
+    ]
+
+    route = respx.get("https://api.example.com/data").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/data",
+        method="GET",
+        stop_condition="lambda x: not x['data'].get('hasMore')",
+        next_request="lambda x: {'url': 'https://api.example.com/data'}",
+        items_jsonpath="$",  # Get entire response data
+        limit=1000,
+    )
+
+    assert route.call_count == 3
+    assert len(result) == 3
+
+    # With $ JSONPath, should return full data objects
+    for i in range(3):
+        assert result[i] == {"data": f"page{i + 1}", "hasMore": i < 2}
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_limit_enforcement() -> None:
+    """Test that pagination respects the limit parameter."""
+    # Create more responses than the limit
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"items": [{"id": i}], "page": i},
+        )
+        for i in range(1, 10)  # 9 responses
+    ]
+
+    route = respx.get("https://api.example.com/limited").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/limited",
+        method="GET",
+        stop_condition="lambda x: False",  # Never stop based on condition
+        next_request="lambda x: {'params': {'page': x['data'].get('page', 0) + 1}}",
+        items_jsonpath="$.items",
+        limit=3,  # Limit to 3 items (flattened)
+    )
+
+    # Should stop after collecting 3 items
+    assert route.call_count == 3
+    assert result == [{"id": 1}, {"id": 2}, {"id": 3}]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_with_post_method() -> None:
+    """Test pagination using POST method with payload."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"results": [1, 2], "continuation": "token1"},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"results": [3, 4], "continuation": None},
+        ),
+    ]
+
+    route = respx.post("https://api.example.com/search").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/search",
+        method="POST",
+        payload={"query": "test"},
+        stop_condition="lambda x: x['data'].get('continuation') is None",
+        next_request="lambda x: {'payload': {'query': 'test', 'continuation': x['data'].get('continuation')}}",
+        items_jsonpath="$.results",
+        limit=1000,
+    )
+
+    assert route.call_count == 2
+    assert result == [1, 2, 3, 4]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_with_headers_and_auth() -> None:
+    """Test pagination with headers and authentication."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"items": ["a"], "next": 2},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"items": ["b"], "next": None},
+        ),
+    ]
+
+    route = respx.get("https://api.example.com/secure").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/secure",
+        method="GET",
+        headers={"X-API-Key": "secret"},
+        auth={"username": "user", "password": "pass"},
+        stop_condition="lambda x: x['data'].get('next') is None",
+        next_request="lambda x: {'params': {'page': x['data'].get('next')}}",
+        items_jsonpath="$.items",
+        limit=1000,
+    )
+
+    assert route.call_count == 2
+
+    # Check that auth headers were sent
+    for call in route.calls:
+        assert "Authorization" in call.request.headers
+        assert call.request.headers["X-API-Key"] == "secret"
+
+    assert result == ["a", "b"]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_immediate_stop() -> None:
+    """Test pagination that stops immediately on first response."""
+    route = respx.get("https://api.example.com/single").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={"items": [1, 2, 3], "complete": True},
+        )
+    )
+
+    result = await http_paginate(
+        url="https://api.example.com/single",
+        method="GET",
+        stop_condition="lambda x: x['data'].get('complete') == True",
+        next_request="lambda x: {'url': 'https://api.example.com/single'}",
+        items_jsonpath="$.items",
+        limit=1000,
+    )
+
+    # Should only make one request and flatten items
+    assert route.call_count == 1
+    assert result == [1, 2, 3]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_complex_jsonpath() -> None:
+    """Test pagination with complex JSONPath expressions."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={
+                "response": {"data": {"users": [{"name": "Alice"}, {"name": "Bob"}]}},
+                "hasMore": True,
+            },
+        ),
+        httpx.Response(
+            status_code=200,
+            json={
+                "response": {"data": {"users": [{"name": "Charlie"}]}},
+                "hasMore": False,
+            },
+        ),
+    ]
+
+    route = respx.get("https://api.example.com/nested").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/nested",
+        method="GET",
+        stop_condition="lambda x: not x['data'].get('hasMore')",
+        next_request="lambda x: {'url': 'https://api.example.com/nested'}",
+        items_jsonpath="$.response.data.users",
+        limit=1000,
+    )
+
+    assert route.call_count == 2
+    assert result == [{"name": "Alice"}, {"name": "Bob"}, {"name": "Charlie"}]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_update_multiple_params() -> None:
+    """Test pagination that updates multiple request parameters."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"items": [1], "next_offset": 10, "next_limit": 5},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"items": [2], "next_offset": None},
+        ),
+    ]
+
+    route = respx.get("https://api.example.com/multi").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/multi",
+        method="GET",
+        params={"offset": 0, "limit": 10},
+        stop_condition="lambda x: x['data'].get('next_offset') is None",
+        next_request="lambda x: {'params': {'offset': x['data'].get('next_offset'), 'limit': x['data'].get('next_limit', 10)}}",
+        items_jsonpath="$.items",
+        limit=1000,
+    )
+
+    assert route.call_count == 2
+    assert result == [1, 2]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_error_handling() -> None:
+    """Test error handling in pagination."""
+    route = respx.get("https://api.example.com/error").mock(
+        side_effect=[
+            httpx.Response(
+                status_code=200,
+                json={"items": [1], "next": True},
+            ),
+            httpx.Response(
+                status_code=500,
+                json={"error": "Internal Server Error"},
+            ),
+        ]
+    )
+
+    with pytest.raises(TracecatException) as excinfo:
+        await http_paginate(
+            url="https://api.example.com/error",
+            method="GET",
+            stop_condition="lambda x: not x['data'].get('next')",
+            next_request="lambda x: {'url': 'https://api.example.com/error'}",
+            items_jsonpath="$.items",
+            limit=1000,
+        )
+
+    assert route.call_count == 2
+    assert "500" in str(excinfo.value)
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_timeout() -> None:
+    """Test timeout handling in pagination."""
+    route = respx.get("https://api.example.com/timeout").mock(
+        side_effect=[
+            httpx.Response(status_code=200, json={"items": [1], "next": True}),
+            httpx.ReadTimeout("Timeout"),
+        ]
+    )
+
+    with pytest.raises(httpx.ReadTimeout):
+        await http_paginate(
+            url="https://api.example.com/timeout",
+            method="GET",
+            stop_condition="lambda x: not x['data'].get('next')",
+            next_request="lambda x: {'url': 'https://api.example.com/timeout'}",
+            items_jsonpath="$.items",
+            timeout=1.0,
+            limit=1000,
+        )
+
+    assert route.call_count == 2
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_form_data() -> None:
+    """Test pagination with form data."""
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={"items": ["form1"], "page": 1},
+        ),
+        httpx.Response(
+            status_code=200,
+            json={"items": ["form2"], "page": 2},
+        ),
+    ]
+
+    route = respx.post("https://api.example.com/form").mock(side_effect=responses)
+
+    result = await http_paginate(
+        url="https://api.example.com/form",
+        method="POST",
+        form_data={"field": "value"},
+        stop_condition="lambda x: x['data'].get('page') >= 2",
+        next_request="lambda x: {'form_data': {'field': 'value', 'page': x['data'].get('page', 0) + 1}}",
+        items_jsonpath="$.items",
+        limit=1000,
+    )
+
+    assert route.call_count == 2
+    assert result == ["form1", "form2"]
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_zero_limit() -> None:
+    """Test pagination with limit=0 (no items collected)."""
+    route = respx.get("https://api.example.com/zero").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={"items": [1, 2, 3]},
+        )
+    )
+
+    result = await http_paginate(
+        url="https://api.example.com/zero",
+        method="GET",
+        stop_condition="lambda x: True",  # Stop immediately
+        next_request="lambda x: {'url': 'https://api.example.com/zero'}",
+        items_jsonpath="$.items",
+        limit=0,  # Zero limit
+    )
+
+    # Should not make any requests when limit is 0
+    assert route.call_count == 0
+    assert result == []
+
+
+@pytest.mark.anyio
+@respx.mock
+async def test_http_paginate_kandji_body_next_results() -> None:
+    """Kandji-style pagination using body `data.next` and `data.results`.
+
+    Response shape:
+    {
+      "data": {
+        "next": "https://redacted.api.kandji.io/api/v1/audit/events?...&cursor=xxx",
+        "previous": null,
+        "results": [...items...]
+      }
+    }
+    """
+    responses = [
+        httpx.Response(
+            status_code=200,
+            json={
+                "data": {
+                    "next": "https://api.kandji.io/api/v1/audit/events?limit=500&sort_by=-occurred_at&cursor=page2",
+                    "previous": None,
+                    "results": [1, 2, 3],
+                }
+            },
+        ),
+        httpx.Response(
+            status_code=200,
+            json={
+                "data": {
+                    "next": "https://api.kandji.io/api/v1/audit/events?limit=500&sort_by=-occurred_at&cursor=page3",
+                    "previous": "https://api.kandji.io/api/v1/audit/events?limit=500&sort_by=-occurred_at",
+                    "results": [4, 5],
+                }
+            },
+        ),
+        httpx.Response(
+            status_code=200,
+            json={
+                "data": {
+                    "next": None,
+                    "previous": "https://api.kandji.io/api/v1/audit/events?limit=500&sort_by=-occurred_at",
+                    "results": [6],
+                }
+            },
+        ),
+    ]
+
+    route = respx.get("https://api.kandji.io/api/v1/audit/events").mock(
+        side_effect=responses
+    )
+
+    result = await http_paginate(
+        url="https://api.kandji.io/api/v1/audit/events",
+        method="GET",
+        stop_condition="lambda x: not x['data']['data'].get('next')",
+        next_request="lambda x: {'url': x['data']['data'].get('next')}",
+        items_jsonpath="$.data.results",
+        limit=1000,
+    )
+
+    assert route.call_count == 3
+    assert result == [1, 2, 3, 4, 5, 6]

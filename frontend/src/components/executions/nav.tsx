@@ -14,6 +14,7 @@ import {
   workflowExecutionsTerminateWorkflowExecution,
 } from "@/client"
 import NoContent from "@/components/no-content"
+import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import {
   HoverCard,
@@ -31,13 +32,13 @@ import { cn, undoSlugify } from "@/lib/utils"
 import "react18-json-view/src/style.css"
 
 import { TriangleRightIcon } from "@radix-ui/react-icons"
+import { useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
-import { useParams, usePathname, useRouter } from "next/navigation"
+import { useParams, usePathname } from "next/navigation"
 import { Spinner } from "@/components/loading/spinner"
-import { ToastAction } from "@/components/ui/toast"
 import { toast } from "@/components/ui/use-toast"
 import { parseExecutionId } from "@/lib/event-history"
-import { useWorkspace } from "@/providers/workspace"
+import { useWorkspaceId } from "@/providers/workspace-id"
 
 /**
  * The top-level view of workflow executions (shows each execution and its status)
@@ -49,12 +50,15 @@ export function WorkflowExecutionNav({
 }: {
   executions?: WorkflowExecutionReadMinimal[]
 }) {
-  const { executionId: currExecutionId } = useParams<{ executionId: string }>()
-  const currExecutionIdDecoded = decodeURIComponent(currExecutionId)
-  const router = useRouter()
+  const params = useParams<{ executionId: string; workflowId: string }>()
+  const currExecutionId = params?.executionId
+  const currExecutionIdDecoded = currExecutionId
+    ? decodeURIComponent(currExecutionId)
+    : null
+  const queryClient = useQueryClient()
   const pathname = usePathname()
-  const baseUrl = pathname.split("/executions")[0]
-  const { workspaceId } = useWorkspace()
+  const baseUrl = pathname ? pathname.split("/executions")[0] : ""
+  const workspaceId = useWorkspaceId()
   if (!workflowExecutions) {
     return <NoContent message="No workflow executions found." />
   }
@@ -64,24 +68,19 @@ export function WorkflowExecutionNav({
     try {
       await workflowExecutionsTerminateWorkflowExecution({
         workspaceId,
-        executionId,
+        executionId: encodeURIComponent(executionId),
         requestBody: {
           reason: "User terminated execution",
         },
       })
       toast({
         title: "Successfully requested termination",
-        description: `Execution ${executionId} has been terminated. You can refresh the page to see the updated status.`,
-        action: (
-          <ToastAction
-            altText="Refresh"
-            onClick={() => window.location.reload()}
-          >
-            Refresh
-          </ToastAction>
-        ),
+        description: `Execution ${executionId} has been terminated.`,
       })
-      router.refresh()
+      // Invalidate executions query to refetch data
+      queryClient.invalidateQueries({
+        queryKey: ["workflow-executions", params?.workflowId],
+      })
     } catch (error) {
       console.error(error)
       toast({
@@ -112,6 +111,14 @@ export function WorkflowExecutionNav({
                     status={execution.status}
                     className="size-4"
                   />
+                  {execution.execution_type === "draft" && (
+                    <Badge
+                      variant="outline"
+                      className="ml-2 h-4 px-1 py-0 text-[10px] font-normal text-muted-foreground"
+                    >
+                      Draft
+                    </Badge>
+                  )}
                   <span className="ml-2">
                     {new Date(execution.start_time).toLocaleString()}
                   </span>
@@ -156,7 +163,7 @@ export function WorkflowExecutionNav({
                     <Label className="text-xs text-muted-foreground">
                       Execution ID
                     </Label>
-                    <span>{parseExecutionId(execution.id)[1]}</span>
+                    <span>{executionId}</span>
                   </div>
                   <div className="flex flex-col">
                     <Label className="text-xs text-muted-foreground">

@@ -9,10 +9,12 @@ import {
   type SetStateAction,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react"
 import { CasePanelView } from "@/components/cases/case-panel-view"
 import { SlidingPanel } from "@/components/sliding-panel"
+import { useSidebar } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 
 interface CasePanelContextType {
@@ -32,11 +34,26 @@ export default function CasePanelProvider({
 }: PropsWithChildren<React.HTMLAttributes<HTMLDivElement>>) {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const caseId = searchParams.get("caseId") || undefined
+  const caseId = searchParams?.get("caseId") || undefined
   const [isOpen, setIsOpen] = useState(false)
+  const { setOpen: setSidebarOpen } = useSidebar()
+  const setSidebarOpenRef = useRef(setSidebarOpen)
+
+  useEffect(() => {
+    setSidebarOpenRef.current = setSidebarOpen
+  }, [setSidebarOpen])
 
   useEffect(() => {
     setIsOpen(!!caseId)
+  }, [caseId])
+
+  useEffect(() => {
+    const updateSidebarOpen = setSidebarOpenRef.current
+    if (caseId) {
+      updateSidebarOpen(false)
+    } else {
+      updateSidebarOpen(true)
+    }
   }, [caseId])
 
   const setCaseId = (caseId?: string) => {

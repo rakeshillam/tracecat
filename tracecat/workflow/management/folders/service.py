@@ -2,41 +2,34 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from typing import Literal
 
 import sqlalchemy as sa
-from sqlmodel import and_, cast, col, func, or_, select
+from sqlalchemy import and_, cast, func, or_, select
+from sqlalchemy.orm import selectinload
 
-from tracecat.db.schemas import Workflow, WorkflowDefinition, WorkflowFolder
+from tracecat.db.models import Workflow, WorkflowDefinition, WorkflowFolder
+from tracecat.exceptions import TracecatNotFoundError, TracecatValidationError
 from tracecat.identifiers import WorkflowID
 from tracecat.identifiers.workflow import WorkflowUUID
-from tracecat.service import BaseService
-from tracecat.tags.models import TagRead
-from tracecat.types.auth import Role
-from tracecat.types.exceptions import (
-    TracecatAuthorizationError,
-    TracecatNotFoundError,
-    TracecatValidationError,
-)
-from tracecat.workflow.management.folders.models import (
+from tracecat.service import BaseWorkspaceService
+from tracecat.tags.schemas import TagRead
+from tracecat.workflow.management.folders.schemas import (
     DirectoryItem,
     FolderDirectoryItem,
     WorkflowDirectoryItem,
 )
-from tracecat.workflow.management.models import WorkflowDefinitionReadMinimal
+from tracecat.workflow.management.schemas import WorkflowDefinitionReadMinimal
 
 
-class WorkflowFolderService(BaseService):
+class WorkflowFolderService(BaseWorkspaceService):
     """Service for managing workflow folders using materialized path pattern."""
 
     service_name = "workflow_folders"
 
-    def __init__(self, session, role: Role | None = None):
-        super().__init__(session, role)
-        if self.role.workspace_id is None:
-            raise TracecatAuthorizationError("Workspace ID is required")
-        self.workspace_id = self.role.workspace_id
-
-    async def create_folder(self, name: str, parent_path: str = "/") -> WorkflowFolder:
+    async def create_folder(
+        self, name: str, parent_path: str = "/", commit: bool = True
+    ) -> WorkflowFolder:
         """Create a new workflow folder.
 
         Args:
@@ -72,10 +65,13 @@ class WorkflowFolderService(BaseService):
         folder = WorkflowFolder(
             name=name,
             path=full_path,
-            owner_id=self.workspace_id,
+            workspace_id=self.workspace_id,
         )
         self.session.add(folder)
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
+        else:
+            await self.session.flush()
         await self.session.refresh(folder)
         return folder
 
@@ -89,11 +85,11 @@ class WorkflowFolderService(BaseService):
             The folder or None if not found
         """
         statement = select(WorkflowFolder).where(
-            WorkflowFolder.owner_id == self.workspace_id,
+            WorkflowFolder.workspace_id == self.workspace_id,
             WorkflowFolder.id == folder_id,
         )
-        result = await self.session.exec(statement)
-        return result.one_or_none()
+        result = await self.session.execute(statement)
+        return result.scalar_one_or_none()
 
     async def get_folder_by_path(self, path: str) -> WorkflowFolder | None:
         """Get a folder by its path.
@@ -109,11 +105,11 @@ class WorkflowFolderService(BaseService):
             path += "/"
 
         statement = select(WorkflowFolder).where(
-            WorkflowFolder.owner_id == self.workspace_id,
+            WorkflowFolder.workspace_id == self.workspace_id,
             WorkflowFolder.path == path,
         )
-        result = await self.session.exec(statement)
-        return result.one_or_none()
+        result = await self.session.execute(statement)
+        return result.scalar_one_or_none()
 
     async def list_folders(self, parent_path: str = "/") -> Sequence[WorkflowFolder]:
         """List all folders within the specified parent path subtree, or all folders if no path is specified.
@@ -128,13 +124,13 @@ class WorkflowFolderService(BaseService):
         # Base statement selecting folders for the current workspace
 
         statement = select(WorkflowFolder).where(
-            WorkflowFolder.owner_id == self.workspace_id,
-            col(WorkflowFolder.path).like(f"{parent_path}%"),
+            WorkflowFolder.workspace_id == self.workspace_id,
+            WorkflowFolder.path.like(f"{parent_path}%"),
         )
 
         # Execute the query and return all matching folders
-        result = await self.session.exec(statement)
-        return result.all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()
 
     async def get_workflows_in_folder(
         self, folder_id: uuid.UUID | None = None
@@ -150,11 +146,11 @@ class WorkflowFolderService(BaseService):
             List of workflows in the folder
         """
         statement = select(Workflow).where(
-            Workflow.owner_id == self.workspace_id,
+            Workflow.workspace_id == self.workspace_id,
             Workflow.folder_id == folder_id,
         )
-        result = await self.session.exec(statement)
-        return result.all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()
 
     async def move_workflow(
         self, workflow_id: WorkflowID, folder: WorkflowFolder | None = None
@@ -170,11 +166,11 @@ class WorkflowFolderService(BaseService):
         """
         # Update the workflow
         statement = select(Workflow).where(
-            Workflow.owner_id == self.workspace_id,
+            Workflow.workspace_id == self.workspace_id,
             Workflow.id == workflow_id,
         )
-        result = await self.session.exec(statement)
-        workflow = result.one_or_none()
+        result = await self.session.execute(statement)
+        workflow = result.scalar_one_or_none()
         if not workflow:
             raise TracecatNotFoundError(f"Workflow {workflow_id} not found")
 
@@ -340,11 +336,12 @@ class WorkflowFolderService(BaseService):
             for descendant in descendants:
                 # Delete workflows in each subfolder
                 statement = select(Workflow).where(
-                    Workflow.owner_id == self.workspace_id,
+                    Workflow.workspace_id == self.workspace_id,
                     Workflow.folder_id == descendant.id,
                 )
-                result = await self.session.exec(statement)
-                for workflow in result:
+                result = await self.session.execute(statement)
+                workflows = result.scalars().all()
+                for workflow in workflows:
                     workflow.folder_id = None
                     self.session.add(workflow)
 
@@ -353,10 +350,12 @@ class WorkflowFolderService(BaseService):
 
             # Delete workflows in the main folder
             statement = select(Workflow).where(
-                Workflow.owner_id == self.workspace_id, Workflow.folder_id == folder.id
+                Workflow.workspace_id == self.workspace_id,
+                Workflow.folder_id == folder.id,
             )
-            result = await self.session.exec(statement)
-            for workflow in result:
+            result = await self.session.execute(statement)
+            workflows = result.scalars().all()
+            for workflow in workflows:
                 workflow.folder_id = None
                 self.session.add(workflow)
 
@@ -380,17 +379,17 @@ class WorkflowFolderService(BaseService):
         statement = (
             select(WorkflowFolder)
             .where(
-                WorkflowFolder.owner_id == self.workspace_id,
+                WorkflowFolder.workspace_id == self.workspace_id,
                 or_(
-                    col(WorkflowFolder.path).startswith(root_path),
-                    col(WorkflowFolder.path) == root_path,
+                    WorkflowFolder.path.startswith(root_path),
+                    WorkflowFolder.path == root_path,
                 ),
             )
             .order_by(WorkflowFolder.path)
         )
 
-        result = await self.session.exec(statement)
-        return result.all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()
 
     async def _folder_path_exists(self, path: str) -> bool:
         """Check if a folder path exists."""
@@ -398,12 +397,12 @@ class WorkflowFolderService(BaseService):
             select(func.count())
             .select_from(WorkflowFolder)
             .where(
-                WorkflowFolder.owner_id == self.workspace_id,
+                WorkflowFolder.workspace_id == self.workspace_id,
                 WorkflowFolder.path == path,
             )
         )
-        result = await self.session.exec(statement)
-        return result.one() > 0
+        result = await self.session.execute(statement)
+        return result.scalar_one() > 0
 
     async def _has_children(self, path: str) -> bool:
         """Check if a folder has any child folders."""
@@ -415,13 +414,13 @@ class WorkflowFolderService(BaseService):
             select(func.count())
             .select_from(WorkflowFolder)
             .where(
-                WorkflowFolder.owner_id == self.workspace_id,
-                col(WorkflowFolder.path).startswith(path),
-                col(WorkflowFolder.path) != path,
+                WorkflowFolder.workspace_id == self.workspace_id,
+                WorkflowFolder.path.startswith(path),
+                WorkflowFolder.path != path,
             )
         )
-        result = await self.session.exec(statement)
-        return result.one() > 0
+        result = await self.session.execute(statement)
+        return result.scalar_one() > 0
 
     async def _has_workflows(self, folder_id: uuid.UUID) -> bool:
         """Check if a folder contains any workflows."""
@@ -429,12 +428,12 @@ class WorkflowFolderService(BaseService):
             select(func.count())
             .select_from(Workflow)
             .where(
-                Workflow.owner_id == self.workspace_id,
+                Workflow.workspace_id == self.workspace_id,
                 Workflow.folder_id == folder_id,
             )
         )
-        result = await self.session.exec(statement)
-        return result.one() > 0
+        result = await self.session.execute(statement)
+        return result.scalar_one() > 0
 
     async def _get_descendants(self, path: str) -> Sequence[WorkflowFolder]:
         """Get all descendant folders of a given path."""
@@ -443,14 +442,16 @@ class WorkflowFolderService(BaseService):
             path += "/"
 
         statement = select(WorkflowFolder).where(
-            WorkflowFolder.owner_id == self.workspace_id,
-            col(WorkflowFolder.path).startswith(path),
-            col(WorkflowFolder.path) != path,
+            WorkflowFolder.workspace_id == self.workspace_id,
+            WorkflowFolder.path.startswith(path),
+            WorkflowFolder.path != path,
         )
-        result = await self.session.exec(statement)
-        return result.all()
+        result = await self.session.execute(statement)
+        return result.scalars().all()
 
-    async def get_directory_items(self, path: str = "/") -> Sequence[DirectoryItem]:
+    async def get_directory_items(
+        self, path: str = "/", *, order_by: Literal["asc", "desc"] = "desc"
+    ) -> Sequence[DirectoryItem]:
         """Get all directory items (workflows and folders) in the given path.
 
         Args:
@@ -488,8 +489,8 @@ class WorkflowFolderService(BaseService):
                 WorkflowDefinition.created_at,
             )
             .where(
-                Workflow.owner_id == self.workspace_id,
-                col(Workflow.folder_id) == folder_id,
+                Workflow.workspace_id == self.workspace_id,
+                Workflow.folder_id == folder_id,
             )
             .outerjoin(
                 latest_defn_subq,
@@ -502,31 +503,37 @@ class WorkflowFolderService(BaseService):
                     WorkflowDefinition.version == latest_defn_subq.c.latest_version,
                 ),
             )
+            .order_by(
+                Workflow.created_at.desc()
+                if order_by == "desc"
+                else Workflow.created_at.asc()
+            )
+            .options(selectinload(Workflow.tags))
         )
 
-        workflow_result = await self.session.exec(workflow_statement)
-        workflows_with_defns = workflow_result.all()
+        workflow_result = await self.session.execute(workflow_statement)
+        workflows_with_defns = workflow_result.tuples().all()
         # For root path, get workflows with no folder_id
         if path == "/":
             # Get root-level folders
             folder_statement = select(WorkflowFolder).where(
-                WorkflowFolder.owner_id == self.workspace_id,
+                WorkflowFolder.workspace_id == self.workspace_id,
                 func.length(WorkflowFolder.path)
                 - func.length(func.replace(WorkflowFolder.path, "/", ""))
                 == 2,  # folders with exactly two slashes
             )
-            folder_result = await self.session.exec(folder_statement)
-            folders = folder_result.all()
+            folder_result = await self.session.execute(folder_statement)
+            folders = folder_result.scalars().all()
         else:
             # Get direct child folders
             folder_statement = select(WorkflowFolder).where(
-                WorkflowFolder.owner_id == self.workspace_id,
-                col(WorkflowFolder.path).startswith(path),
-                col(WorkflowFolder.path) != path,
-                ~col(WorkflowFolder.path).like(f"{path}%/%/"),  # Exclude nested folders
+                WorkflowFolder.workspace_id == self.workspace_id,
+                WorkflowFolder.path.startswith(path),
+                WorkflowFolder.path != path,
+                ~WorkflowFolder.path.like(f"{path}%/%/"),  # Exclude nested folders
             )
-            folder_result = await self.session.exec(folder_statement)
-            folders = folder_result.all()
+            folder_result = await self.session.execute(folder_statement)
+            folders = folder_result.scalars().all()
 
         # Convert to directory items
         directory_items: list[DirectoryItem] = []
@@ -541,7 +548,12 @@ class WorkflowFolderService(BaseService):
                 FolderDirectoryItem(
                     type="folder",
                     num_items=num_items,
-                    **folder.model_dump(),
+                    id=folder.id,
+                    name=folder.name,
+                    path=folder.path,
+                    workspace_id=folder.workspace_id,
+                    created_at=folder.created_at,
+                    updated_at=folder.updated_at,
                 )
             )
 

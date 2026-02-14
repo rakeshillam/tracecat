@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod"
-import { CirclePlusIcon } from "lucide-react"
+import { Plus } from "lucide-react"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -7,6 +7,7 @@ import {
   ApiError,
   type UserRead,
   usersSearchUser,
+  type WorkspaceMembershipRead,
   type WorkspaceRead,
 } from "@/client"
 import { Button } from "@/components/ui/button"
@@ -34,9 +35,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { useAuth } from "@/hooks/use-auth"
+import {
+  useCurrentUserRole,
+  useWorkspaceMutations,
+} from "@/hooks/use-workspace"
 import { WorkspaceRoleEnum } from "@/lib/workspace"
-import { useAuth } from "@/providers/auth"
-import { useWorkspace } from "@/providers/workspace"
 
 const addUserSchema = z.object({
   email: z.string().email(),
@@ -49,8 +53,8 @@ export function AddWorkspaceMember({
   className,
 }: { workspace: WorkspaceRead } & React.HTMLAttributes<HTMLButtonElement>) {
   const { user } = useAuth()
-  const { membership, addWorkspaceMembership: addWorkspaceMember } =
-    useWorkspace()
+  const { role } = useCurrentUserRole(workspace.id)
+  const { addMember: addWorkspaceMember } = useWorkspaceMutations()
   const [showDialog, setShowDialog] = useState(false)
   const form = useForm<AddUser>({
     resolver: zodResolver(addUserSchema),
@@ -107,11 +111,11 @@ export function AddWorkspaceMember({
       <DialogTrigger asChild>
         <Button
           variant="outline"
-          role="combobox"
-          disabled={!user?.isPrivileged(membership)}
-          className="disabled:cursor-not-allowed"
+          size="sm"
+          disabled={!user?.isPrivileged({ role } as WorkspaceMembershipRead)}
+          className="h-7 bg-white disabled:cursor-not-allowed"
         >
-          <CirclePlusIcon className="mr-2 size-4" />
+          <Plus className="mr-1 h-3.5 w-3.5" />
           Add member
         </Button>
       </DialogTrigger>

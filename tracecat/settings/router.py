@@ -2,26 +2,26 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, status
 
+from tracecat import config
 from tracecat.auth.credentials import RoleACL
 from tracecat.auth.dependencies import Role
 from tracecat.auth.enums import AuthType
+from tracecat.authz.enums import OrgRole
 from tracecat.config import SAML_PUBLIC_ACS_URL
 from tracecat.db.dependencies import AsyncDBSession
-from tracecat.settings.constants import AUTH_TYPE_TO_SETTING_KEY
-from tracecat.settings.models import (
+from tracecat.settings.schemas import (
+    AgentSettingsRead,
+    AgentSettingsUpdate,
     AppSettingsRead,
     AppSettingsUpdate,
-    AuthSettingsRead,
-    AuthSettingsUpdate,
+    AuditSettingsRead,
+    AuditSettingsUpdate,
     GitSettingsRead,
     GitSettingsUpdate,
-    OAuthSettingsRead,
-    OAuthSettingsUpdate,
     SAMLSettingsRead,
     SAMLSettingsUpdate,
 )
 from tracecat.settings.service import SettingsService
-from tracecat.types.auth import AccessLevel
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -31,7 +31,7 @@ OrgAdminUserRole = Annotated[
         allow_user=True,
         allow_service=False,
         require_workspace="no",
-        min_access_level=AccessLevel.ADMIN,
+        require_org_roles=[OrgRole.OWNER, OrgRole.ADMIN],
     ),
 ]
 
@@ -50,16 +50,20 @@ OrgUserRole = Annotated[
 
 
 async def check_other_auth_enabled(
-    service: SettingsService, auth_type: AuthType
+    _service: SettingsService, auth_type: AuthType
 ) -> None:
     """Check if at least one other auth type is enabled."""
-
-    all_keys = set(AUTH_TYPE_TO_SETTING_KEY.values())
-    all_keys.remove(AUTH_TYPE_TO_SETTING_KEY[auth_type])
-    for key in all_keys:
-        setting = await service.get_org_setting(key)
-        if setting and service.get_value(setting) is True:
-            return
+    if auth_type is not AuthType.SAML:
+        return
+    if any(
+        candidate_auth_type in config.TRACECAT__AUTH_TYPES
+        for candidate_auth_type in (
+            AuthType.BASIC,
+            AuthType.OIDC,
+            AuthType.GOOGLE_OAUTH,
+        )
+    ):
+        return
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="At least one other auth type must be enabled",
@@ -120,59 +124,6 @@ async def update_saml_settings(
     await service.update_saml_settings(params)
 
 
-@router.get("/auth", response_model=AuthSettingsRead)
-async def get_auth_settings(
-    *,
-    role: OrgAdminUserRole,
-    session: AsyncDBSession,
-) -> AuthSettingsRead:
-    service = SettingsService(session, role)
-    keys = AuthSettingsRead.keys()
-    settings = await service.list_org_settings(keys=keys)
-    settings_dict = {setting.key: service.get_value(setting) for setting in settings}
-    return AuthSettingsRead(**settings_dict)
-
-
-@router.patch("/auth", status_code=status.HTTP_204_NO_CONTENT)
-async def update_auth_settings(
-    *,
-    role: OrgAdminUserRole,
-    session: AsyncDBSession,
-    params: AuthSettingsUpdate,
-) -> None:
-    service = SettingsService(session, role)
-    if not params.auth_basic_enabled:
-        await check_other_auth_enabled(service, AuthType.BASIC)
-    await service.update_auth_settings(params)
-
-
-@router.get("/oauth", response_model=OAuthSettingsRead)
-async def get_oauth_settings(
-    *,
-    role: OrgAdminUserRole,
-    session: AsyncDBSession,
-) -> OAuthSettingsRead:
-    service = SettingsService(session, role)
-    keys = OAuthSettingsRead.keys()
-    settings = await service.list_org_settings(keys=keys)
-    settings_dict = {setting.key: service.get_value(setting) for setting in settings}
-    return OAuthSettingsRead(**settings_dict)
-
-
-@router.patch("/oauth", status_code=status.HTTP_204_NO_CONTENT)
-async def update_oauth_settings(
-    *,
-    role: OrgAdminUserRole,
-    session: AsyncDBSession,
-    params: OAuthSettingsUpdate,
-) -> None:
-    service = SettingsService(session, role)
-    # If we're trying to disable OAuth, we must have at least one other auth type enabled
-    if not params.oauth_google_enabled:
-        await check_other_auth_enabled(service, AuthType.GOOGLE_OAUTH)
-    await service.update_oauth_settings(params)
-
-
 @router.get("/app", response_model=AppSettingsRead)
 async def get_app_settings(
     *,
@@ -195,3 +146,51 @@ async def update_app_settings(
 ) -> None:
     service = SettingsService(session, role)
     await service.update_app_settings(params)
+
+
+@router.get("/audit", response_model=AuditSettingsRead)
+async def get_audit_settings(
+    *,
+    role: OrgAdminUserRole,
+    session: AsyncDBSession,
+) -> AuditSettingsRead:
+    service = SettingsService(session, role)
+    keys = AuditSettingsRead.keys()
+    settings = await service.list_org_settings(keys=keys)
+    settings_dict = {setting.key: service.get_value(setting) for setting in settings}
+    return AuditSettingsRead(**settings_dict)
+
+
+@router.patch("/audit", status_code=status.HTTP_204_NO_CONTENT)
+async def update_audit_settings(
+    *,
+    role: OrgAdminUserRole,
+    session: AsyncDBSession,
+    params: AuditSettingsUpdate,
+) -> None:
+    service = SettingsService(session, role)
+    await service.update_audit_settings(params)
+
+
+@router.get("/agent", response_model=AgentSettingsRead)
+async def get_agent_settings(
+    *,
+    role: OrgAdminUserRole,
+    session: AsyncDBSession,
+) -> AgentSettingsRead:
+    service = SettingsService(session, role)
+    keys = AgentSettingsRead.keys()
+    settings = await service.list_org_settings(keys=keys)
+    settings_dict = {setting.key: service.get_value(setting) for setting in settings}
+    return AgentSettingsRead(**settings_dict)
+
+
+@router.patch("/agent", status_code=status.HTTP_204_NO_CONTENT)
+async def update_agent_settings(
+    *,
+    role: OrgAdminUserRole,
+    session: AsyncDBSession,
+    params: AgentSettingsUpdate,
+) -> None:
+    service = SettingsService(session, role)
+    await service.update_agent_settings(params)

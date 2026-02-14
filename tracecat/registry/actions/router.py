@@ -1,10 +1,14 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from tracecat_registry import RegistrySecret
 
 from tracecat.auth.credentials import RoleACL
+from tracecat.auth.types import Role
+from tracecat.authz.enums import OrgRole
 from tracecat.db.dependencies import AsyncDBSession
+from tracecat.exceptions import RegistryError
 from tracecat.logger import logger
-from tracecat.registry.actions.models import (
+from tracecat.registry.actions.schemas import (
     RegistryActionCreate,
     RegistryActionRead,
     RegistryActionReadMinimal,
@@ -12,8 +16,6 @@ from tracecat.registry.actions.models import (
 )
 from tracecat.registry.actions.service import RegistryActionsService
 from tracecat.registry.constants import DEFAULT_REGISTRY_ORIGIN, REGISTRY_ACTIONS_PATH
-from tracecat.types.auth import AccessLevel, Role
-from tracecat.types.exceptions import RegistryError
 
 router = APIRouter(prefix=REGISTRY_ACTIONS_PATH, tags=["registry-actions"])
 
@@ -28,12 +30,12 @@ async def list_registry_actions(
     ),
     session: AsyncDBSession,
 ) -> list[RegistryActionReadMinimal]:
-    """List all actions in a registry."""
+    """List all actions from registry index."""
     service = RegistryActionsService(session, role)
-    actions = await service.list_actions()
+    index_entries = await service.list_actions_from_index()
     return [
-        RegistryActionReadMinimal.model_validate(action, from_attributes=True)
-        for action in actions
+        RegistryActionReadMinimal.from_index(entry, origin)
+        for entry, origin in index_entries
     ]
 
 
@@ -54,11 +56,45 @@ async def get_registry_action(
 ) -> RegistryActionRead:
     """Get a specific registry action."""
     service = RegistryActionsService(session, role)
-    try:
-        action = await service.get_action(action_name=action_name)
-        return await service.read_action_with_implicit_secrets(action)
-    except RegistryError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    result = await service.get_action_from_index(action_name)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Action {action_name} not found",
+        )
+
+    manifest_action = result.manifest.actions.get(action_name)
+    if not manifest_action:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Action {action_name} not found in manifest",
+        )
+
+    # Aggregate secrets from template steps (if any)
+    extra_secrets = RegistryActionsService.aggregate_secrets_from_manifest(
+        result.manifest, action_name
+    )
+    # Remove direct secrets (already in manifest_action) to avoid duplicates
+    # The from_index_and_manifest method will merge them properly
+    if manifest_action.secrets:
+        direct_secret_keys = {
+            s.name if isinstance(s, RegistrySecret) else s.provider_id
+            for s in manifest_action.secrets
+        }
+        extra_secrets = [
+            s
+            for s in extra_secrets
+            if (s.name if isinstance(s, RegistrySecret) else s.provider_id)
+            not in direct_secret_keys
+        ]
+
+    return RegistryActionRead.from_index_and_manifest(
+        result.index_entry,
+        manifest_action,
+        result.origin,
+        result.repository_id,
+        extra_secrets=extra_secrets,
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -68,7 +104,7 @@ async def create_registry_action(
         allow_user=True,
         allow_service=False,
         require_workspace="no",
-        min_access_level=AccessLevel.ADMIN,
+        require_org_roles=[OrgRole.OWNER, OrgRole.ADMIN],
     ),
     session: AsyncDBSession,
     params: RegistryActionCreate,
@@ -97,7 +133,7 @@ async def update_registry_action(
         allow_user=True,
         allow_service=False,
         require_workspace="no",
-        min_access_level=AccessLevel.ADMIN,
+        require_org_roles=[OrgRole.OWNER, OrgRole.ADMIN],
     ),
     session: AsyncDBSession,
     params: RegistryActionUpdate,
@@ -106,7 +142,7 @@ async def update_registry_action(
     """Update a custom registry action."""
     service = RegistryActionsService(session, role)
     try:
-        action = await service.get_action(action_name=action_name)
+        action = await service.get_action(action_name)
         await service.update_action(action, params)
     except RegistryError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
@@ -119,7 +155,7 @@ async def delete_registry_action(
         allow_user=True,
         allow_service=False,
         require_workspace="no",
-        min_access_level=AccessLevel.ADMIN,
+        require_org_roles=[OrgRole.OWNER, OrgRole.ADMIN],
     ),
     session: AsyncDBSession,
     action_name: str,
@@ -127,7 +163,7 @@ async def delete_registry_action(
     """Delete a template action."""
     service = RegistryActionsService(session, role)
     try:
-        action = await service.get_action(action_name=action_name)
+        action = await service.get_action(action_name)
     except RegistryError as e:
         logger.error("Error getting action", action_name=action_name, error=e)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e

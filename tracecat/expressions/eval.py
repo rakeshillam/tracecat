@@ -1,16 +1,23 @@
 import re
 from collections.abc import Callable
 from functools import partial
-from typing import Any, TypeVar
+from typing import Any
 
 from tracecat.expressions import patterns
-from tracecat.expressions.common import ExprOperand, IterableExpr
-from tracecat.expressions.core import Expression, TemplateExpression
+from tracecat.expressions.common import ExprContext, ExprOperand, IterableExpr
+from tracecat.expressions.core import (
+    CollectedExprs,
+    Expression,
+    ExprPathCollector,
+    SecretPathExtractor,
+    TemplateExpression,
+)
+from tracecat.parse import traverse_expressions
 
-T = TypeVar("T", str, list[Any], dict[str, Any])
 
-
-def _eval_templated_obj_rec[T](obj: T, operator: Callable[[str], Any]) -> T:
+def _eval_templated_obj_rec[T: (str, list[Any], dict[str, Any])](
+    obj: T, operator: Callable[[str], Any]
+) -> T:
     """Process jsonpaths in strings, lists, and dictionaries."""
     match obj:
         case str():
@@ -75,22 +82,24 @@ def is_template_only(template: str) -> bool:
     return template.startswith("${{") and template.endswith("}}")
 
 
-def extract_templated_secrets(
-    templated_obj: Any,
-    *,
-    pattern: re.Pattern[str] = patterns.SECRET_SCAN_TEMPLATE,
-) -> list[str]:
-    """Extract secrets from templated objects."""
-    secrets: set[str] = set()
+def extract_templated_secrets(templated_obj: Any) -> list[str]:
+    """Extract secrets from templated objects using AST parsing."""
+    # Extract and parse all template expressions from all strings
+    extractor = SecretPathExtractor()
+    for expr_str in traverse_expressions(templated_obj):
+        Expression(expr_str, visitor=extractor).visit()
+    # Get the results and return only the secrets
+    results = extractor.results()
+    secrets = set(results.get(ExprContext.SECRETS, []))
+    return sorted(secrets)
 
-    def operator(line: str) -> Any:
-        """Collect secrets from the templated string."""
-        for match in re.finditer(pattern, line):
-            secret = match.group("secret")
-            secrets.add(secret)
 
-    _eval_templated_obj_rec(templated_obj, operator)
-    return list(secrets)
+def collect_expressions(templated_obj: Any) -> CollectedExprs:
+    """Collect secrets and variables from expressions."""
+    visitor = ExprPathCollector()
+    for expr_str in traverse_expressions(templated_obj):
+        Expression(expr_str, visitor=visitor).visit()
+    return visitor.results()
 
 
 def extract_expressions(templated_obj: Any) -> list[Expression]:

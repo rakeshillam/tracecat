@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import ipaddress
 import itertools
 import json
@@ -21,9 +22,13 @@ import yaml
 from slugify import slugify
 
 from tracecat.common import is_iterable
-from tracecat.contexts import ctx_interaction
-from tracecat.ee.interactions.models import InteractionContext
-from tracecat.expressions.formatters import tabulate
+from tracecat.contexts import ctx_interaction, ctx_logical_time
+from tracecat.expressions.formatters import (
+    tabulate,
+    to_markdown_list,
+    to_markdown_table,
+    to_markdown_tasks,
+)
 from tracecat.expressions.ioc_extractors import (
     extract_asns,
     extract_cves,
@@ -40,6 +45,7 @@ from tracecat.expressions.ioc_extractors import (
     extract_urls,
     normalize_email,
 )
+from tracecat.interactions.schemas import InteractionContext
 from tracecat.parse import unescape_string
 
 
@@ -127,6 +133,11 @@ def slice_str(x: str, start_index: int, length: int) -> str:
     return x[start_index : start_index + length]
 
 
+def at(sequence: Sequence[Any], index: int) -> Any:
+    """Return the element at the given index."""
+    return sequence[index]
+
+
 def endswith(x: str, suffix: str) -> bool:
     """Check if a string ends with a specified suffix."""
     return x.endswith(suffix)
@@ -154,7 +165,7 @@ def str_to_b64(x: str) -> str:
 
 def b64_to_str(x: str) -> str:
     """Decode base64 string to string."""
-    return base64.b64decode(x).decode()
+    return base64.b64decode(x.encode("utf-8")).decode()
 
 
 def str_to_b64url(x: str) -> str:
@@ -164,7 +175,38 @@ def str_to_b64url(x: str) -> str:
 
 def b64url_to_str(x: str) -> str:
     """Decode URL-safe base64 string to string."""
-    return base64.urlsafe_b64decode(x).decode()
+    return base64.urlsafe_b64decode(x.encode("utf-8")).decode()
+
+
+# Hash functions
+
+
+def hash_md5(x: str | bytes) -> str:
+    """Generate MD5 hash of input string or bytes."""
+    if isinstance(x, str):
+        x = x.encode()
+    return hashlib.md5(x).hexdigest()
+
+
+def hash_sha1(x: str | bytes) -> str:
+    """Generate SHA1 hash of input string or bytes."""
+    if isinstance(x, str):
+        x = x.encode()
+    return hashlib.sha1(x).hexdigest()
+
+
+def hash_sha256(x: str | bytes) -> str:
+    """Generate SHA256 hash of input string or bytes."""
+    if isinstance(x, str):
+        x = x.encode()
+    return hashlib.sha256(x).hexdigest()
+
+
+def hash_sha512(x: str | bytes) -> str:
+    """Generate SHA512 hash of input string or bytes."""
+    if isinstance(x, str):
+        x = x.encode()
+    return hashlib.sha512(x).hexdigest()
 
 
 def replace(x: str, old: str, new: str) -> str:
@@ -173,11 +215,15 @@ def replace(x: str, old: str, new: str) -> str:
 
 
 def regex_extract(pattern: str, text: str) -> str | None:
-    """Extract first match of regex pattern from text."""
+    """Extract the first captured group from text; fallback to full match if none."""
     match = re.search(pattern, text)
-    if match:
-        return match.group(0)
-    return None
+    if not match:
+        return None
+    if match.lastindex:
+        for group in match.groups():
+            if group is not None:
+                return group
+    return match.group(0)
 
 
 def regex_match(pattern: str, text: str) -> bool:
@@ -292,6 +338,16 @@ def round_down(x: float) -> int:
     return math.floor(x)
 
 
+def min_(a: Any, b: Any) -> Any:
+    """Return the minimum of two values."""
+    return min(a, b)
+
+
+def max_(a: Any, b: Any) -> Any:
+    """Return the maximum of two values."""
+    return max(a, b)
+
+
 # Array functions
 
 
@@ -320,6 +376,16 @@ def not_empty(x: Sequence[Any]) -> bool:
     return len(x) > 0
 
 
+def contains_any_of(a: Sequence[Any], b: Sequence[Any]) -> bool:
+    """Check if any of the elements of the first sequence exist in the second sequence."""
+    return bool(set(a) & set(b))
+
+
+def contains_none_of(a: Sequence[Any], b: Sequence[Any]) -> bool:
+    """Check if all of of the elements of the first sequence don't exist in the second sequence."""
+    return not (bool(set(a) & set(b)))
+
+
 def _custom_chain(*args) -> Any:
     """Recursively flattens nested iterables into a single generator."""
     for arg in args:
@@ -337,6 +403,26 @@ def flatten(iterables: Sequence[Sequence[Any]]) -> list[Any]:
 def unique(items: Sequence[Any]) -> list[Any]:
     """List of hashable items (e.g. strings, numbers) to remove duplicates from."""
     return list(set(items))
+
+
+def union(a: Sequence[Any], b: Sequence[Any]) -> list[Any]:
+    """Return a list containing the union of elements from two sequences."""
+    return list(set(a).union(b))
+
+
+def intersection(a: Sequence[Any], b: Sequence[Any]) -> list[Any]:
+    """Return a list containing the intersection of elements from two sequences."""
+    return list(set(a).intersection(b))
+
+
+def difference(a: Sequence[Any], b: Sequence[Any]) -> list[Any]:
+    """Return a list of elements that are in the first sequence but not in the second."""
+    return list(set(a).difference(b))
+
+
+def symmetric_difference(a: Sequence[Any], b: Sequence[Any]) -> list[Any]:
+    """Return a list of elements that are in either sequence but not in both."""
+    return list(set(a).symmetric_difference(b))
 
 
 def join_strings(items: Sequence[str], sep: str) -> str:
@@ -360,9 +446,9 @@ def iter_product(*iterables: Sequence[Any]) -> list[tuple[Any, ...]]:
     return list(itertools.product(*iterables))
 
 
-def create_range(start: int, end: int, step: int = 1) -> range:
+def create_range(start: int, end: int, step: int = 1) -> list[int]:
     """Create a range of integers from start to end (exclusive), with a step size."""
-    return range(start, end, step)
+    return list(range(start, end, step))
 
 
 # Dictionary functions
@@ -382,17 +468,6 @@ def is_json(x: str) -> bool:
         return True
     except orjson.JSONDecodeError:
         return False
-
-
-def index_by_key(
-    x: list[dict[str, Any]],
-    field_key: str,
-    value_key: str | None = None,
-) -> dict[str, Any]:
-    """Convert a list of objects into an object indexed by the specified key."""
-    if value_key:
-        return {item[field_key]: item[value_key] for item in x}
-    return {item[field_key]: item for item in x}
 
 
 def merge_dicts(x: list[dict[Any, Any]]) -> dict[Any, Any]:
@@ -773,19 +848,83 @@ def to_isoformat(x: datetime | str, timespec: str = "auto") -> str:
     return x.isoformat(timespec=timespec)
 
 
-def now() -> datetime:
-    """Return the current datetime."""
-    return datetime.now()
+def now(as_isoformat: bool = False, timespec: str = "auto") -> datetime | str:
+    """Return workflow logical time (local, naive) or current time if outside workflow.
+
+    When called within a workflow context, returns the workflow's logical time
+    (time_anchor + elapsed workflow time) converted to the local timezone as a
+    naive datetime. This ensures deterministic behavior during workflow replay
+    and reset while allowing time to progress as the workflow executes.
+
+    Outside workflow context, falls back to wall clock time.
+    """
+    logical_time = ctx_logical_time.get()
+    if logical_time is not None:
+        # Convert UTC logical_time to local timezone, then make naive
+        dt = logical_time.astimezone().replace(tzinfo=None)
+    else:
+        dt = datetime.now()
+
+    if as_isoformat:
+        return to_isoformat(dt, timespec)
+    return dt
 
 
-def utcnow() -> datetime:
-    """Return the current timezone-aware datetime."""
-    return datetime.now(UTC)
+def utcnow(as_isoformat: bool = False, timespec: str = "auto") -> datetime | str:
+    """Return workflow logical time (UTC, aware) or current UTC time if outside workflow.
+
+    When called within a workflow context, returns the workflow's logical time
+    (time_anchor + elapsed workflow time) as a UTC-aware datetime. This ensures
+    deterministic behavior during workflow replay and reset while allowing time
+    to progress as the workflow executes.
+
+    Outside workflow context, falls back to wall clock UTC time.
+    """
+    logical_time = ctx_logical_time.get()
+    if logical_time is not None:
+        # Ensure logical_time is UTC-aware; convert if it has a different timezone
+        if logical_time.tzinfo is None:
+            dt = logical_time.replace(tzinfo=UTC)
+        else:
+            dt = logical_time.astimezone(UTC)
+    else:
+        dt = datetime.now(UTC)
+
+    if as_isoformat:
+        return to_isoformat(dt, timespec)
+    return dt
 
 
 def today() -> date:
-    """Return the current date."""
+    """Return workflow logical time date (local) or current date if outside workflow.
+
+    When called within a workflow context, returns the date portion of the
+    workflow's logical time (time_anchor + elapsed workflow time) in local
+    timezone. This ensures deterministic behavior during workflow replay and reset.
+
+    Outside workflow context, falls back to current date.
+    """
+    logical_time = ctx_logical_time.get()
+    if logical_time is not None:
+        # Convert to local timezone and get date
+        return logical_time.astimezone().date()
     return date.today()
+
+
+def wall_clock(as_isoformat: bool = False, timespec: str = "auto") -> datetime | str:
+    """Return actual current wall clock time (local, naive).
+
+    This function always returns the real current time, ignoring any workflow
+    time_anchor. Use this only when you need the actual wall clock time rather
+    than the workflow's logical time.
+
+    Note: Using wall_clock() in workflows may cause non-deterministic behavior
+    during replay. Prefer FN.now() for most use cases.
+    """
+    dt = datetime.now()
+    if as_isoformat:
+        return to_isoformat(dt, timespec)
+    return dt
 
 
 def set_timezone(x: datetime | str, timezone: str) -> datetime:
@@ -933,7 +1072,11 @@ _FUNCTION_MAPPING = {
     "compact": compact,
     "contains": is_in,  # alias for is_in
     "does_not_contain": not_in,  # alias for not_in
+    "contains_any_of": contains_any_of,
+    "contains_none_of": contains_none_of,
+    "difference": difference,
     "flatten": flatten,
+    "intersection": intersection,
     "is_empty": is_empty,
     "is_in": is_in,
     "length": len,
@@ -941,8 +1084,11 @@ _FUNCTION_MAPPING = {
     "is_not_empty": not_empty,  # alias for not_empty
     "not_in": not_in,
     "is_not_in": not_in,  # alias for not_in
+    "symmetric_difference": symmetric_difference,
+    "union": union,
     "unique": unique,
     "zip_map": zip_map,  # Inspired by Terraform: https://developer.hashicorp.com/terraform/language/functions/zipmap
+    "at": at,
     # Math
     "add": add,
     "sub": sub,
@@ -951,6 +1097,8 @@ _FUNCTION_MAPPING = {
     "mod": mod,
     "pow": pow,
     "sum": sum_,
+    "min": min_,
+    "max": max_,
     # Iteration
     "zip": zip_iterables,
     "iter_product": iter_product,
@@ -958,13 +1106,16 @@ _FUNCTION_MAPPING = {
     # Generators
     "uuid4": generate_uuid,
     # JSON functions
-    "index_by_key": index_by_key,
     "lookup": dict_lookup,
     "map_keys": map_dict_keys,
     "merge": merge_dicts,
     "to_keys": dict_keys,
     "to_values": dict_values,
     "tabulate": tabulate,
+    # Formatters
+    "to_markdown_list": to_markdown_list,
+    "to_markdown_table": to_markdown_table,
+    "to_markdown_tasks": to_markdown_tasks,
     # Logical
     "and": and_,
     "or": or_,
@@ -1008,6 +1159,7 @@ _FUNCTION_MAPPING = {
     "today": today,
     "unset_timezone": unset_timezone,
     "utcnow": utcnow,
+    "wall_clock": wall_clock,
     "weeks_between": weeks_between,
     "weeks": create_weeks,
     "windows_filetime": windows_filetime,
@@ -1016,6 +1168,11 @@ _FUNCTION_MAPPING = {
     "from_base64": b64_to_str,
     "to_base64url": str_to_b64url,
     "from_base64url": b64url_to_str,
+    # Hash functions
+    "hash_md5": hash_md5,
+    "hash_sha1": hash_sha1,
+    "hash_sha256": hash_sha256,
+    "hash_sha512": hash_sha512,
     # IP addresses
     "ipv4_in_subnet": ipv4_in_subnet,
     "ipv6_in_subnet": ipv6_in_subnet,
@@ -1082,7 +1239,7 @@ def mappable(func: F) -> F:
         zipped_args = zip(*iterables, strict=False)
         return [func(*zipped) for zipped in zipped_args]
 
-    wrapper.map = broadcast_map  # type: ignore
+    wrapper.map = broadcast_map  # pyright: ignore[reportAttributeAccessIssue]
     wrapper.__doc__ = func.__doc__
     return wrapper
 

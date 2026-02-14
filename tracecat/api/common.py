@@ -1,6 +1,8 @@
-from fastapi import Request, status
+from fastapi import Request, Response, status
 from fastapi.responses import ORJSONResponse
 from fastapi.routing import APIRoute
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import (
     AddSearchAttributesRequest,
@@ -13,15 +15,17 @@ from tenacity import (
     wait_exponential,
 )
 
+from tracecat.auth.types import AccessLevel, Role
 from tracecat.config import TEMPORAL__CLUSTER_NAMESPACE
 from tracecat.contexts import ctx_role
 from tracecat.dsl.client import get_temporal_client
+from tracecat.exceptions import TracecatException
+from tracecat.identifiers import OrganizationID
 from tracecat.logger import logger
-from tracecat.types.auth import AccessLevel, Role
-from tracecat.types.exceptions import TracecatException
+from tracecat.workflow.executions.enums import TemporalSearchAttr
 
 
-def generic_exception_handler(request: Request, exc: Exception):
+def generic_exception_handler(request: Request, exc: Exception) -> Response:
     logger.error(
         "Unexpected error",
         exc=exc,
@@ -35,31 +39,75 @@ def generic_exception_handler(request: Request, exc: Exception):
     )
 
 
-def bootstrap_role():
-    """Role to bootstrap Tracecat services."""
+def bootstrap_role(organization_id: OrganizationID | None = None) -> Role:
+    """Role to bootstrap Tracecat services.
+
+    Args:
+        organization_id: Optional organization ID to scope the bootstrap role to.
+            If None, creates a role without org scope (for platform-level operations).
+
+    Returns:
+        Role: A service role with platform superuser privileges for the specified organization.
+    """
     return Role(
         type="service",
         access_level=AccessLevel.ADMIN,
         service_id="tracecat-bootstrap",
+        organization_id=organization_id,
+        is_platform_superuser=True,
     )
 
 
-def tracecat_exception_handler(request: Request, exc: TracecatException):
+async def get_default_organization_id(session: AsyncSession) -> OrganizationID:
+    """Get the default (first) organization ID.
+
+    This is used by auth modules that need to read platform-level settings
+    before user authentication provides an org context.
+
+    Args:
+        session: Database session.
+
+    Returns:
+        OrganizationID: The ID of the first organization.
+
+    Raises:
+        ValueError: If no organizations exist.
+    """
+    # Import here to avoid circular imports
+    from tracecat.db.models import Organization
+
+    result = await session.execute(
+        select(Organization).order_by(Organization.created_at).limit(1)
+    )
+    org = result.scalar_one_or_none()
+    if org is None:
+        raise ValueError("No organizations exist. Run bootstrap first.")
+    return org.id
+
+
+def tracecat_exception_handler(request: Request, exc: Exception) -> Response:
     """Generic exception handler for Tracecat exceptions.
 
     We can customize exceptions to expose only what should be user facing.
     """
-    msg = str(exc)
+    tracecat_exc = (
+        exc if isinstance(exc, TracecatException) else TracecatException(str(exc))
+    )
+    msg = str(tracecat_exc)
     logger.error(
         msg,
         role=ctx_role.get(),
         params=request.query_params,
         path=request.url.path,
-        detail=exc.detail,
+        detail=tracecat_exc.detail,
     )
     return ORJSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"type": type(exc).__name__, "message": msg, "detail": exc.detail},
+        content={
+            "type": type(exc).__name__,
+            "message": msg,
+            "detail": tracecat_exc.detail,
+        },
     )
 
 
@@ -82,13 +130,17 @@ async def add_temporal_search_attributes():
     """
     client = await get_temporal_client()
     namespace = TEMPORAL__CLUSTER_NAMESPACE
+    attrs = {
+        TemporalSearchAttr.TRIGGER_TYPE.value: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+        TemporalSearchAttr.TRIGGERED_BY_USER_ID.value: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+        TemporalSearchAttr.WORKSPACE_ID.value: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+        TemporalSearchAttr.ALIAS.value: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+        TemporalSearchAttr.EXECUTION_TYPE.value: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+    }
     try:
         await client.operator_service.add_search_attributes(
             AddSearchAttributesRequest(
-                search_attributes={
-                    "TracecatTriggerType": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                    "TracecatTriggeredByUserId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                },
+                search_attributes=attrs,
                 namespace=namespace,
             )
         )
@@ -102,7 +154,7 @@ async def add_temporal_search_attributes():
         logger.info(
             "Temporal search attributes added",
             namespace=namespace,
-            search_attributes=["TracecatTriggerType", "TracecatTriggeredByUserId"],
+            search_attributes=list(attrs.keys()),
         )
 
 
@@ -123,8 +175,11 @@ async def remove_temporal_search_attributes():
         await client.operator_service.remove_search_attributes(
             RemoveSearchAttributesRequest(
                 search_attributes=[
-                    "TracecatTriggerType",
-                    "TracecatTriggeredByUserId",
+                    TemporalSearchAttr.TRIGGER_TYPE.value,
+                    TemporalSearchAttr.TRIGGERED_BY_USER_ID.value,
+                    TemporalSearchAttr.WORKSPACE_ID.value,
+                    TemporalSearchAttr.ALIAS.value,
+                    TemporalSearchAttr.EXECUTION_TYPE.value,
                 ],
                 namespace=namespace,
             )
@@ -139,5 +194,11 @@ async def remove_temporal_search_attributes():
         logger.info(
             "Temporal search attributes removed",
             namespace=namespace,
-            search_attributes=["TracecatTriggerType", "TracecatTriggeredByUserId"],
+            search_attributes=[
+                TemporalSearchAttr.TRIGGER_TYPE.value,
+                TemporalSearchAttr.TRIGGERED_BY_USER_ID.value,
+                TemporalSearchAttr.WORKSPACE_ID.value,
+                TemporalSearchAttr.ALIAS.value,
+                TemporalSearchAttr.EXECUTION_TYPE.value,
+            ],
         )

@@ -1,14 +1,14 @@
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import EmailStr
+from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
-from sqlmodel import select
 
 from tracecat.auth.credentials import RoleACL
-from tracecat.auth.models import UserRead
-from tracecat.authz.models import WorkspaceRole
+from tracecat.auth.schemas import UserRead
+from tracecat.auth.types import Role
+from tracecat.authz.enums import WorkspaceRole
 from tracecat.db.dependencies import AsyncDBSession
-from tracecat.db.schemas import User
-from tracecat.types.auth import AccessLevel, Role
+from tracecat.db.models import User
 
 router = APIRouter(prefix="/users")
 
@@ -24,12 +24,9 @@ async def search_user(
     email: EmailStr | None = Query(None),
     session: AsyncDBSession,
 ) -> UserRead:
-    """Create new user."""
-    # Either an org admin or workspace admin
-    if not (
-        role.access_level == AccessLevel.ADMIN
-        or role.workspace_role == WorkspaceRole.ADMIN
-    ):
+    """Search for a user by email."""
+    # Platform admin, org owner/admin, or workspace admin can search users
+    if not (role.is_privileged or role.workspace_role == WorkspaceRole.ADMIN):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     if not email:
@@ -40,11 +37,11 @@ async def search_user(
 
     statement = select(User)
     if email is not None:
-        statement = statement.where(User.email == email)
+        statement = statement.where(User.email == email)  # pyright: ignore[reportArgumentType]
 
-    result = await session.exec(statement)
+    result = await session.execute(statement)
     try:
-        user = result.one()
+        user = result.scalar_one()
         return UserRead.model_validate(user)
     except NoResultFound as e:
         raise HTTPException(

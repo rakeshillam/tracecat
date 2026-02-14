@@ -4,10 +4,12 @@ import abc
 import re
 from collections import defaultdict
 from collections.abc import Mapping
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, TypeVar
 
 from lark import Token, Tree, Visitor
 
+from tracecat.exceptions import TracecatExpressionError
 from tracecat.expressions import patterns
 from tracecat.expressions.common import ExprContext, ExprOperand, ExprType
 from tracecat.expressions.parser.core import parser
@@ -15,7 +17,9 @@ from tracecat.expressions.parser.evaluator import ExprEvaluator
 from tracecat.expressions.validator.validator import BaseExprValidator
 from tracecat.logger import logger
 from tracecat.parse import traverse_expressions
-from tracecat.types.exceptions import TracecatExpressionError
+
+ExtractorResult = TypeVar("ExtractorResult", covariant=True)
+ValidatorResult = TypeVar("ValidatorResult")
 
 
 class Expression:
@@ -25,8 +29,8 @@ class Expression:
         self,
         expression: str,
         *,
-        operand: ExprOperand | None = None,
-        visitor: Visitor | None = None,
+        operand: ExprOperand[str] | None = None,
+        visitor: Visitor[Token] | None = None,
     ) -> None:
         self._expr = expression
         self._operand = operand
@@ -40,6 +44,9 @@ class Expression:
         return f"Expression(expression={self._expr}, operand={self._operand})"
 
     def __call__(self) -> Any:
+        return self.visit()
+
+    def visit(self) -> Any:
         match self._visitor:
             case BaseExprValidator():
                 return self.result()
@@ -77,7 +84,7 @@ class Expression:
 
     def validate(
         self,
-        visitor: BaseExprValidator,
+        visitor: BaseExprValidator[ValidatorResult],
         *,
         loc: tuple[str | int, ...] | None = None,
         exclude: set[ExprType] | None = None,
@@ -110,7 +117,7 @@ class Expression:
                 loc=("validation", self._expr),
             )
 
-    def extract(self, visitor: ExprExtractor) -> Mapping[ExprContext, set[str]]:
+    def extract(self, visitor: ExprExtractor[ExtractorResult]) -> ExtractorResult:
         parse_tree = self._parser.parse(self._expr)
         if parse_tree is None:
             raise TracecatExpressionError(
@@ -133,9 +140,9 @@ class TemplateExpression:
     def __init__(
         self,
         template: str,
-        operand: ExprOperand | None = None,
+        operand: ExprOperand[str] | None = None,
         pattern: re.Pattern[str] = patterns.TEMPLATE_STRING,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         match = pattern.match(template)
         if match is None:
@@ -159,17 +166,17 @@ class TemplateExpression:
         return self.expr.result()
 
 
-class ExprExtractor(Visitor, abc.ABC):
+class ExprExtractor[ExtractorResult](Visitor[Token], abc.ABC):
     """Extract components from an expression."""
 
     _visitor_name = "ExprExtractor"
 
     @abc.abstractmethod
-    def results(self) -> Mapping[ExprContext, set[str]]:
+    def results(self) -> ExtractorResult:
         raise NotImplementedError
 
 
-class RegistryActionExtractor(ExprExtractor):
+class RegistryActionExtractor(ExprExtractor[Mapping[ExprContext, set[str]]]):
     def __init__(self) -> None:
         self._results = defaultdict[ExprContext, set[str]](set)
         self.logger = logger.bind(visitor=self._visitor_name)
@@ -197,9 +204,75 @@ class RegistryActionExtractor(ExprExtractor):
         secret, _ = jsonpath.split(".", 1)
         self._results[ExprContext.SECRETS].add(secret)
 
+    def vars(self, node: Tree[Token]) -> None:
+        token = node.children[0]
+        self.logger.trace("Visit vars expression", node=node, child=token)
+        if not isinstance(token, Token):
+            raise ValueError("Expected a string token")
+        jsonpath = token.lstrip(".")
+        var_name = jsonpath.split(".", 1)[0]
+        self._results[ExprContext.VARS].add(var_name)
+
 
 def extract_expressions(args: Mapping[str, Any]) -> Mapping[ExprContext, set[str]]:
     extractor = RegistryActionExtractor()
     for expr_str in traverse_expressions(args):
-        Expression(expr_str, visitor=extractor)()
+        Expression(expr_str, visitor=extractor).visit()
     return extractor.results()
+
+
+class SecretPathExtractor(ExprExtractor[Mapping[ExprContext, set[str]]]):
+    """Extracts full secret paths including keys."""
+
+    def __init__(self) -> None:
+        self._results = defaultdict[ExprContext, set[str]](set)
+        self.logger = logger.bind(visitor="SecretPathExtractor")
+
+    def results(self) -> Mapping[ExprContext, set[str]]:
+        return self._results
+
+    def secrets(self, node: Tree[Token]) -> None:
+        token = node.children[0]
+        self.logger.trace("Visit secret expression", node=node, child=token)
+        if not isinstance(token, Token):
+            raise ValueError("Expected a string token")
+        # Get the full path after SECRETS.
+        jsonpath = token.lstrip(".")
+        # Store the full path (e.g., "a.K1" not just "a")
+        self._results[ExprContext.SECRETS].add(jsonpath)
+
+
+@dataclass(slots=True)
+class CollectedExprs:
+    secrets: set[str] = field(default_factory=set)
+    variables: set[str] = field(default_factory=set)
+
+
+class ExprPathCollector(ExprExtractor[CollectedExprs]):
+    """Collects secrets and variables from expressions."""
+
+    def __init__(self) -> None:
+        self._results = CollectedExprs()
+        self.logger = logger.bind(visitor="SecretPathExtractor")
+
+    def results(self) -> CollectedExprs:
+        return self._results
+
+    def secrets(self, node: Tree[Token]) -> None:
+        token = node.children[0]
+        self.logger.trace("Visit secret expression", node=node, child=token)
+        if not isinstance(token, Token):
+            raise ValueError("Expected a string token")
+        # Get the full path after SECRETS.
+        jsonpath = token.lstrip(".")
+        # Store the full path (e.g., "a.K1" not just "a")
+        self._results.secrets.add(jsonpath)
+
+    def vars(self, node: Tree[Token]) -> None:
+        token = node.children[0]
+        self.logger.trace("Visit vars expression", node=node, child=token)
+        if not isinstance(token, Token):
+            raise ValueError("Expected a string token")
+        jsonpath = token.lstrip(".")
+        var_name = jsonpath.split(".", 1)[0]
+        self._results.variables.add(var_name)

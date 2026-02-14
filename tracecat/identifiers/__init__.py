@@ -39,41 +39,59 @@ e.g. wf-77932a0b140a4465a1a25a5c95edcfb8:run-b140a425a577932a0c95edcfb8465a1a
 """
 
 import uuid
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import UUID4, StringConstraints
-
-from tracecat.identifiers import action, resource, schedules, workflow
-from tracecat.identifiers.action import ActionID, ActionKey, ActionRef
+from tracecat.identifiers import action, resource, schedules, secret, workflow
+from tracecat.identifiers.action import ActionID, ActionKey, ActionRef, ActionUUID
 from tracecat.identifiers.resource import id_factory
-from tracecat.identifiers.schedules import ScheduleID
+from tracecat.identifiers.schedules import (
+    ScheduleUUID,
+    schedule_id_to_temporal,
+)
+from tracecat.identifiers.secret import SecretID, SecretUUID
 from tracecat.identifiers.workflow import (
     WorkflowExecutionID,
     WorkflowExecutionSuffixID,
     WorkflowID,
     WorkflowRunID,
+    WorkflowUUID,
 )
 
-UserID = UUID4
-WorkspaceID = UUID4
+UserID = uuid.UUID
+WorkspaceID = uuid.UUID
+OrganizationID = uuid.UUID
+"""Organization identifier type. Uses a sentinel UUID for the default organization."""
+
 OwnerID = uuid.UUID
-"""Owner identifier type. This is UUID because we use UUID(0) for the organization.
+"""Generic owner identifier for Ownership model. Can be UserID, WorkspaceID, or OrganizationID."""
 
-Owners can be Workspaces or the Organization.
-"""
+# SecretID is now imported from tracecat/identifiers/secret.py
 
-SecretID = Annotated[str, StringConstraints(pattern=r"secret-[0-9a-f]{32}")]
-SessionID = UUID4
-TagID = UUID4
-TableID = UUID4
-TableColumnID = UUID4
-TableRowID = UUID4
+WebhookID = uuid.UUID
+"""A unique ID for a webhook. Uses native UUID format."""
+
+WorkflowDefinitionID = uuid.UUID
+"""A unique ID for a workflow definition. Now uses native UUID format."""
+
+VariableID = uuid.UUID
+SessionID = uuid.UUID
+WorkflowTagID = uuid.UUID
+TagID = WorkflowTagID
+CaseTagID = uuid.UUID
+TableID = uuid.UUID
+TableColumnID = uuid.UUID
+TableRowID = uuid.UUID
+InvitationID = uuid.UUID
 
 InternalServiceID = Literal[
     "tracecat-api",
     "tracecat-bootstrap",
     "tracecat-cli",
     "tracecat-executor",
+    "tracecat-agent-executor",
+    "tracecat-case-triggers",
+    "tracecat-llm-gateway",
+    "tracecat-mcp",
     "tracecat-runner",
     "tracecat-schedule-runner",
     "tracecat-service",
@@ -84,18 +102,32 @@ __all__ = [
     "ActionID",
     "ActionKey",
     "ActionRef",
+    "ActionUUID",
     "WorkflowID",
+    "WorkflowUUID",
     "WorkflowExecutionID",
     "WorkflowExecutionSuffixID",
     "WorkflowRunID",
-    "ScheduleID",
+    "ScheduleUUID",
+    "schedule_id_to_temporal",
+    "SecretID",
+    "SecretUUID",
+    "WebhookID",
+    "WorkflowDefinitionID",
     "UserID",
     "WorkspaceID",
+    "OrganizationID",
+    "OwnerID",
     "TagID",
+    "WorkflowTagID",
+    "CaseTagID",
     "SessionID",
+    "VariableID",
+    "InvitationID",
     "id_factory",
     "action",
     "workflow",
     "schedules",
+    "secret",
     "resource",
 ]

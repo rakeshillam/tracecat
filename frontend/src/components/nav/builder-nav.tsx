@@ -4,23 +4,41 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import {
   AlertTriangleIcon,
   ChevronDownIcon,
+  CopyIcon,
   DownloadIcon,
+  GitBranchIcon,
+  LayersPlusIcon,
   MoreHorizontal,
   PlayIcon,
-  SaveIcon,
   SquarePlay,
+  Trash2Icon,
   WorkflowIcon,
 } from "lucide-react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import React from "react"
 import { useForm } from "react-hook-form"
-import YAML from "yaml"
 import { z } from "zod"
+import type {
+  DSLValidationResult,
+  ValidationDetail,
+  ValidationResult,
+} from "@/client"
 import { ApiError } from "@/client"
 import { CodeEditor } from "@/components/editor/codemirror/code-editor"
 import { ExportMenuItem } from "@/components/export-workflow-dropdown-item"
 import { Spinner } from "@/components/loading/spinner"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import {
   Breadcrumb,
@@ -30,10 +48,11 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { Dialog } from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -43,38 +62,40 @@ import {
   FormItem,
   FormMessage,
 } from "@/components/ui/form"
+import { Input } from "@/components/ui/input"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { ValidationErrorView } from "@/components/validation-errors"
+import { useFeatureFlag } from "@/hooks/use-feature-flags"
+import { useWorkspaceDetails } from "@/hooks/use-workspace"
 import type { TracecatApiError } from "@/lib/errors"
 import {
-  useCreateManualWorkflowExecution,
+  useCreateDraftWorkflowExecution,
   useOrgAppSettings,
+  useWorkflowManager,
 } from "@/lib/hooks"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard } from "@/lib/utils"
 import { useWorkflowBuilder } from "@/providers/builder"
 import { useWorkflow } from "@/providers/workflow"
-import { useWorkspace } from "@/providers/workspace"
+import { useWorkspaceId } from "@/providers/workspace-id"
 
 export function BuilderNav() {
   const {
     workflow,
     isLoading: workflowLoading,
     commitWorkflow,
+    publishWorkflow,
     validationErrors,
     setValidationErrors,
   } = useWorkflow()
 
-  const { workspaceId, workspace, workspaceLoading } = useWorkspace()
+  const workspaceId = useWorkspaceId()
+  const { workspace, workspaceLoading } = useWorkspaceDetails()
+  const workflowTitle = workflow?.title ?? "Untitled workflow"
 
   const handleCommit = async () => {
     console.log("Saving changes...")
@@ -95,8 +116,8 @@ export function BuilderNav() {
     return null
   }
 
-  const manualTriggerDisabled = workflow.version === null
-  const workflowsPath = `/workspaces/${workspaceId}/workflows`
+  // Always allow running - use draft endpoint when no committed version
+  const manualTriggerDisabled = false
 
   return (
     <div className="flex w-full items-center">
@@ -104,23 +125,29 @@ export function BuilderNav() {
         <Breadcrumb>
           <BreadcrumbList className="flex-nowrap overflow-hidden whitespace-nowrap">
             <BreadcrumbItem>
-              <BreadcrumbLink href={workflowsPath}>
-                {workspace.name}
+              <BreadcrumbLink asChild>
+                <Link href={`/workspaces/${workspaceId}/workflows`}>
+                  {workspace.name}
+                </Link>
               </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator className="shrink-0 font-semibold">
               {"/"}
             </BreadcrumbSeparator>
             <BreadcrumbItem>
-              <span>{workflow.title}</span>
-              {workflow.alias && (
-                <Badge
-                  variant="secondary"
-                  className="font-mono text-xs font-normal tracking-tighter text-muted-foreground hover:cursor-default"
-                >
-                  {workflow.alias}
-                </Badge>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm text-foreground">
+                  {workflowTitle}
+                </span>
+                {workflow.alias && (
+                  <Badge
+                    variant="secondary"
+                    className="font-mono text-xs font-normal tracking-tighter text-muted-foreground hover:cursor-default"
+                  >
+                    {workflow.alias}
+                  </Badge>
+                )}
+              </div>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
@@ -136,41 +163,12 @@ export function BuilderNav() {
           workflowId={workflow.id}
         />
         {/* Save button */}
-        <div className="flex items-center space-x-2">
-          <ValidationErrorView
-            side="bottom"
-            validationErrors={validationErrors || []}
-            noErrorTooltip={
-              <span>
-                Save workflow v{(workflow.version || 0) + 1} with your changes.
-              </span>
-            }
-          >
-            <Button
-              variant="outline"
-              onClick={handleCommit}
-              className={cn(
-                "h-7 text-xs text-muted-foreground hover:bg-emerald-500 hover:text-white",
-                validationErrors &&
-                  "border-rose-400 text-rose-400 hover:bg-transparent hover:text-rose-500"
-              )}
-            >
-              {validationErrors ? (
-                <AlertTriangleIcon className="mr-2 size-4 fill-red-500 stroke-white" />
-              ) : (
-                <SaveIcon className="mr-2 size-4" />
-              )}
-              Save
-            </Button>
-          </ValidationErrorView>
-
-          <Badge
-            variant="secondary"
-            className="h-7 text-xs font-normal text-muted-foreground hover:cursor-default"
-          >
-            {workflow.version ? `v${workflow.version}` : "Draft"}
-          </Badge>
-        </div>
+        <WorkflowSaveActions
+          workflow={workflow}
+          validationErrors={validationErrors}
+          onSave={handleCommit}
+          onPublish={publishWorkflow}
+        />
 
         {/* Workflow options */}
         <BuilderNavOptions workspaceId={workspaceId} workflowId={workflow.id} />
@@ -181,9 +179,9 @@ export function BuilderNav() {
 
 function TabSwitcher({ workflowId }: { workflowId: string }) {
   const pathname = usePathname()
-  const { workspaceId } = useWorkspace()
+  const workspaceId = useWorkspaceId()
   let leafRoute: string = "workflow"
-  if (pathname.includes("executions")) {
+  if (pathname && pathname.includes("executions")) {
     leafRoute = "executions"
   }
 
@@ -192,13 +190,21 @@ function TabSwitcher({ workflowId }: { workflowId: string }) {
   return (
     <Tabs value={leafRoute}>
       <TabsList className="grid h-8 w-full grid-cols-2">
-        <TabsTrigger className="w-full px-2 py-0" value="workflow" asChild>
+        <TabsTrigger
+          className="w-full px-2 py-0 after:content-none"
+          value="workflow"
+          asChild
+        >
           <Link href={builderPath} className="size-full text-xs" passHref>
             <WorkflowIcon className="mr-2 size-4" />
             <span>Workflow</span>
           </Link>
         </TabsTrigger>
-        <TabsTrigger className="w-full px-2 py-0" value="executions" asChild>
+        <TabsTrigger
+          className="w-full px-2 py-0 after:content-none"
+          value="executions"
+          asChild
+        >
           <Link
             href={`${builderPath}/executions`}
             className="size-full text-xs"
@@ -234,6 +240,11 @@ const workflowControlsFormSchema = z.object({
 })
 type TWorkflowControlsForm = z.infer<typeof workflowControlsFormSchema>
 
+const publishFormSchema = z.object({
+  message: z.string().optional(),
+})
+type TPublishForm = z.infer<typeof publishFormSchema>
+
 function WorkflowManualTrigger({
   disabled = true,
   workflowId,
@@ -243,16 +254,16 @@ function WorkflowManualTrigger({
 }) {
   const { expandSidebarAndFocusEvents, setCurrentExecutionId } =
     useWorkflowBuilder()
-  const { createExecution, createExecutionIsPending } =
-    useCreateManualWorkflowExecution(workflowId)
+  // Always use draft execution endpoint - runs the current draft workflow graph
+  const { createDraftExecution, createDraftExecutionIsPending } =
+    useCreateDraftWorkflowExecution(workflowId)
   const [open, setOpen] = React.useState(false)
   const [lastTriggerInput, setLastTriggerInput] = React.useState<string | null>(
     null
   )
-  const [manualTriggerErrors, setManualTriggerErrors] = React.useState<Record<
-    string,
-    string
-  > | null>(null)
+  const [manualTriggerErrors, setManualTriggerErrors] = React.useState<
+    ValidationResult[] | null
+  >(null)
   const [isTriggering, setIsTriggering] = React.useState(false)
   const form = useForm<TWorkflowControlsForm>({
     resolver: zodResolver(workflowControlsFormSchema),
@@ -264,12 +275,12 @@ function WorkflowManualTrigger({
   })
 
   const runWorkflow = async ({ payload }: Partial<TWorkflowControlsForm>) => {
-    if (disabled || createExecutionIsPending) return
+    if (disabled || createDraftExecutionIsPending) return
     setIsTriggering(true)
     setTimeout(() => setIsTriggering(false), 1000)
     setManualTriggerErrors(null)
     try {
-      const result = await createExecution({
+      const result = await createDraftExecution({
         workflow_id: workflowId,
         inputs: payload ? JSON.parse(payload) : undefined,
       })
@@ -283,9 +294,45 @@ function WorkflowManualTrigger({
       expandSidebarAndFocusEvents()
     } catch (error) {
       if (error instanceof ApiError) {
-        const tracecatError = error as TracecatApiError<Record<string, string>>
-        console.error("Error details", tracecatError.body.detail)
-        setManualTriggerErrors(tracecatError.body.detail)
+        const tracecatError = error as TracecatApiError<{
+          type?: string
+          message?: string
+          detail?: unknown
+        }>
+        console.error("Error details", tracecatError.body)
+        const detail = tracecatError.body.detail
+        let detailMessage: string | undefined
+        if (typeof detail === "string") {
+          detailMessage = detail
+        } else if (
+          detail &&
+          typeof detail === "object" &&
+          "message" in detail &&
+          typeof (detail as { message?: unknown }).message === "string"
+        ) {
+          detailMessage = (detail as { message?: string }).message
+        } else if (detail) {
+          try {
+            detailMessage = JSON.stringify(detail)
+          } catch {
+            detailMessage = undefined
+          }
+        }
+        const details =
+          Array.isArray(detail) && detail.every((d) => "msg" in (d as object))
+            ? (detail as ValidationDetail[])
+            : detailMessage
+              ? [{ type: "api_error", msg: detailMessage }]
+              : null
+        // Convert API error to ValidationResult format for consistent display
+        const validationError: DSLValidationResult = {
+          type: "dsl",
+          status: "error",
+          msg: detailMessage || "Failed to start workflow",
+          ref: null,
+          detail: details,
+        }
+        setManualTriggerErrors([validationError])
       }
     }
   }
@@ -300,56 +347,63 @@ function WorkflowManualTrigger({
     }
   }
 
-  const executionPending = createExecutionIsPending || isTriggering
+  const executionPending = createDraftExecutionIsPending || isTriggering
   return (
     <Form {...form}>
-      <div className="flex h-7 gap-px rounded-lg border border-input bg-emerald-400">
-        {/* Main Button */}
-        <Button
-          type="button"
-          variant="outline"
+      <ValidationErrorView
+        side="bottom"
+        validationErrors={manualTriggerErrors || []}
+        noErrorTooltip={
+          <span>
+            {disabled
+              ? "Cannot run workflow."
+              : executionPending
+                ? "Starting workflow execution..."
+                : "Run the current draft workflow with trigger inputs."}
+          </span>
+        }
+      >
+        <div
           className={cn(
-            "h-full gap-2 rounded-r-none border-none px-3 py-0 text-xs font-bold",
+            "flex h-7 divide-x rounded-lg border border-input overflow-hidden",
             manualTriggerErrors
-              ? "text-rose-400 hover:text-rose-500"
-              : "bg-emerald-500 text-white hover:bg-emerald-400 hover:text-white"
+              ? "divide-white/30 dark:divide-black/30"
+              : "divide-white/20 dark:divide-black/40"
           )}
-          disabled={disabled || executionPending}
-          onClick={() => runWorkflow({ payload: undefined })}
         >
-          {executionPending ? (
-            <Spinner className="size-3" segmentColor="#fff" />
-          ) : manualTriggerErrors ? (
-            <AlertTriangleIcon className="size-3 fill-red-500 stroke-white" />
-          ) : (
-            <PlayIcon className="size-3 fill-white stroke-white" />
-          )}
-          <span>Run</span>
-        </Button>
-        {/* Dropdown Button */}
-        <Tooltip delayDuration={500}>
+          {/* Main Button */}
+          <Button
+            type="button"
+            variant={manualTriggerErrors ? "destructive" : "default"}
+            className="h-full gap-2 rounded-r-none border-none px-3 py-0 text-xs"
+            disabled={disabled || executionPending}
+            onClick={() => runWorkflow({ payload: undefined })}
+          >
+            {executionPending ? (
+              <Spinner className="size-3" segmentColor="currentColor" />
+            ) : manualTriggerErrors ? (
+              <AlertTriangleIcon className="size-3" />
+            ) : (
+              <PlayIcon className="size-3" />
+            )}
+            <span>Run</span>
+          </Button>
+          {/* Dropdown Button */}
           <Popover
             open={open && !disabled}
             onOpenChange={(newOpen) => !disabled && setOpen(newOpen)}
           >
-            <TooltipTrigger asChild>
-              <PopoverTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={cn(
-                    "h-full w-7 rounded-l-none border-none px-1 py-0 text-xs font-bold",
-                    manualTriggerErrors
-                      ? "text-rose-400 hover:text-rose-500"
-                      : "bg-emerald-500 text-white hover:bg-emerald-400 hover:text-white"
-                  )}
-                  disabled={disabled || executionPending}
-                >
-                  <ChevronDownIcon className="size-3" />
-                </Button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <PopoverContent className="w-fit p-3">
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant={manualTriggerErrors ? "destructive" : "default"}
+                className="h-full w-7 rounded-l-none border-none px-1 py-0 text-xs font-bold"
+                disabled={disabled || executionPending}
+              >
+                <ChevronDownIcon className="size-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-fit max-w-xl p-3 sm:max-w-2xl">
               <form onSubmit={form.handleSubmit(runWithPayload)}>
                 <div className="flex h-fit flex-col">
                   <span className="mb-2 text-xs text-muted-foreground">
@@ -365,6 +419,7 @@ function WorkflowManualTrigger({
                             value={field.value}
                             language="json"
                             onChange={field.onChange}
+                            className="[&_.cm-editor]:!border [&_.cm-editor]:!border-input [&_.cm-editor]:!bg-background [&_.cm-editor]:rounded-md [&_.cm-scroller]:max-h-96 [&_.cm-scroller]:overflow-auto [&_.cm-scroller]:h-auto sm:[&_.cm-scroller]:max-h-[500px]"
                           />
                         </FormControl>
                         <FormMessage />
@@ -375,12 +430,15 @@ function WorkflowManualTrigger({
                     type="submit"
                     variant="default"
                     disabled={executionPending}
-                    className="group mt-2 flex h-7 items-center bg-emerald-500 px-3 py-0 text-xs text-white hover:bg-emerald-500/80 hover:text-white"
+                    className="group mt-2 flex h-7 items-center px-3 py-0 text-xs"
                   >
                     {executionPending ? (
-                      <Spinner className="mr-2 size-3" />
+                      <Spinner
+                        className="mr-2 size-3.5"
+                        segmentColor="currentColor"
+                      />
                     ) : (
-                      <PlayIcon className="mr-2 size-3 fill-white stroke-white" />
+                      <PlayIcon className="mr-2 size-3.5" />
                     )}
                     <span>{executionPending ? "Starting..." : "Run"}</span>
                   </Button>
@@ -388,32 +446,146 @@ function WorkflowManualTrigger({
               </form>
             </PopoverContent>
           </Popover>
-          <TooltipContent
-            side="bottom"
-            className={cn("text-xs shadow-lg", manualTriggerErrors && "p-0")}
-          >
-            {manualTriggerErrors ? (
-              <div className="space-y-2 overflow-auto rounded-md border border-rose-400 bg-rose-100 p-2 font-mono tracking-tighter">
-                <span className="text-xs font-bold text-rose-500">
-                  Trigger Validation Errors
-                </span>
-                <div className="mt-1 space-y-1">
-                  <pre className="text-wrap text-rose-500">
-                    {YAML.stringify(manualTriggerErrors)}
-                  </pre>
-                </div>
-              </div>
-            ) : disabled ? (
-              "Please save changes to enable manual trigger."
-            ) : executionPending ? (
-              "Starting workflow execution..."
-            ) : (
-              "Run the workflow with trigger inputs."
-            )}
-          </TooltipContent>
-        </Tooltip>
-      </div>
+        </div>
+      </ValidationErrorView>
     </Form>
+  )
+}
+
+function WorkflowSaveActions({
+  workflow,
+  validationErrors,
+  onSave,
+  onPublish,
+}: {
+  workflow: { version?: number | null }
+  validationErrors: ValidationResult[] | null
+  onSave: () => Promise<void>
+  onPublish: (params: { message?: string }) => Promise<void>
+}) {
+  const { isFeatureEnabled } = useFeatureFlag()
+  const [publishOpen, setPublishOpen] = React.useState(false)
+  const [isPublishing, setIsPublishing] = React.useState(false)
+
+  const publishForm = useForm<TPublishForm>({
+    resolver: zodResolver(publishFormSchema),
+    defaultValues: {
+      message: "",
+    },
+  })
+
+  const handlePublish = async (data: TPublishForm) => {
+    setIsPublishing(true)
+    try {
+      await onPublish({ message: data.message || undefined })
+    } finally {
+      setIsPublishing(false)
+      setPublishOpen(false)
+      publishForm.reset()
+    }
+  }
+
+  const isGitSyncEnabled = isFeatureEnabled("git-sync")
+
+  return (
+    <div className="flex items-center space-x-2">
+      <div className="flex h-7 gap-px rounded-lg border border-input">
+        {/* Main Publish Button */}
+        <ValidationErrorView
+          side="bottom"
+          validationErrors={validationErrors || []}
+          noErrorTooltip={
+            <span>
+              Publish workflow v{(workflow.version || 0) + 1} with your changes.
+            </span>
+          }
+        >
+          <Button
+            variant="outline"
+            onClick={onSave}
+            className={cn(
+              "h-full border-none px-3 py-0 text-xs text-muted-foreground",
+              isGitSyncEnabled ? "rounded-r-none" : "rounded-lg",
+              validationErrors &&
+                "border-rose-400 text-rose-400 hover:bg-transparent hover:text-rose-500"
+            )}
+          >
+            {validationErrors ? (
+              <AlertTriangleIcon className="mr-2 size-3.5 fill-red-500 stroke-white" />
+            ) : (
+              <LayersPlusIcon className="mr-2 size-3.5" />
+            )}
+            Publish
+          </Button>
+        </ValidationErrorView>
+
+        {/* Dropdown Button - Only show if git-sync is enabled */}
+        {isGitSyncEnabled && (
+          <DropdownMenu open={publishOpen} onOpenChange={setPublishOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="h-full w-7 rounded-l-none border-none px-1 py-0 text-xs text-muted-foreground"
+              >
+                <ChevronDownIcon className="size-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-96 p-3">
+              <Form {...publishForm}>
+                <form
+                  onSubmit={publishForm.handleSubmit(handlePublish)}
+                  className="flex flex-col"
+                >
+                  <span className="mb-2 text-xs text-muted-foreground">
+                    Commit workflow
+                  </span>
+                  <FormField
+                    control={publishForm.control}
+                    name="message"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormControl>
+                          <Input
+                            {...field}
+                            placeholder="Add a short description of your changes (optional)"
+                            className="h-7 px-3 text-xs"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <Button
+                    type="submit"
+                    disabled={isPublishing}
+                    className="mt-2 flex h-7 w-full items-center justify-center gap-2 bg-primary px-3 py-0 text-xs text-white hover:bg-primary/80"
+                  >
+                    {isPublishing ? (
+                      <>
+                        <Spinner className="size-3" />
+                        Publishing changes...
+                      </>
+                    ) : (
+                      <>
+                        <GitBranchIcon className="size-3" />
+                        Publish changes
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </Form>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+
+      <Badge
+        variant="secondary"
+        className="h-7 text-xs font-normal text-muted-foreground hover:cursor-default"
+      >
+        {workflow.version ? `v${workflow.version}` : "Draft"}
+      </Badge>
+    </div>
   )
 }
 
@@ -424,10 +596,18 @@ function BuilderNavOptions({
   workspaceId: string
   workflowId: string
 }) {
+  const router = useRouter()
   const { appSettings } = useOrgAppSettings()
+  const { deleteWorkflow } = useWorkflowManager()
   const enabledExport = appSettings?.app_workflow_export_enabled
+
+  const handleDelete = async () => {
+    await deleteWorkflow(workflowId)
+    router.push(`/workspaces/${workspaceId}/workflows`)
+  }
+
   return (
-    <Dialog>
+    <AlertDialog>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon">
@@ -441,17 +621,54 @@ function BuilderNavOptions({
             format="yaml"
             workspaceId={workspaceId}
             workflowId={workflowId}
-            icon={<DownloadIcon className="mr-2 size-4" />}
+            draft={true}
+            label="Export draft"
+            icon={<DownloadIcon className="mr-2 size-3.5" />}
           />
           <ExportMenuItem
             enabledExport={enabledExport}
-            format="json"
+            format="yaml"
             workspaceId={workspaceId}
             workflowId={workflowId}
-            icon={<DownloadIcon className="mr-2 size-4" />}
+            draft={false}
+            label="Export saved"
+            icon={<DownloadIcon className="mr-2 size-3.5" />}
           />
+          <DropdownMenuItem
+            onClick={() =>
+              copyToClipboard({
+                value: workflowId,
+                message: "Copied workflow ID to clipboard",
+              })
+            }
+          >
+            <CopyIcon className="mr-2 size-3.5" />
+            Copy workflow ID
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <AlertDialogTrigger asChild>
+            <DropdownMenuItem className="text-destructive focus:text-destructive">
+              <Trash2Icon className="mr-2 size-3.5" />
+              Delete workflow
+            </DropdownMenuItem>
+          </AlertDialogTrigger>
         </DropdownMenuContent>
       </DropdownMenu>
-    </Dialog>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete workflow</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to delete this workflow? This action cannot be
+            undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={handleDelete}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

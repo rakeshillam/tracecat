@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/popover"
 import { toast } from "@/components/ui/use-toast"
 import { useFolders, useWorkflowManager } from "@/lib/hooks"
-import { useWorkspace } from "@/providers/workspace"
+import { useWorkspaceId } from "@/providers/workspace-id"
 
 interface WorkflowMoveDialogProps {
   open: boolean
@@ -39,9 +39,9 @@ export function WorkflowMoveDialog({
   selectedWorkflow,
   setSelectedWorkflow,
 }: WorkflowMoveDialogProps) {
-  const { workspaceId } = useWorkspace()
+  const workspaceId = useWorkspaceId()
   const { moveWorkflow } = useWorkflowManager()
-  const { folders } = useFolders(workspaceId)
+  const { folders } = useFolders(workspaceId, { enabled: open })
   const [isLoading, setIsLoading] = useState(false)
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [openFolderSelect, setOpenFolderSelect] = useState(false)
@@ -103,19 +103,30 @@ export function WorkflowMoveDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center py-4">
+        <div className="w-full flex items-center py-4">
           <Popover open={openFolderSelect} onOpenChange={setOpenFolderSelect}>
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
                 role="combobox"
                 aria-expanded={openFolderSelect}
-                className="w-full justify-between"
+                className="flex w-96 max-w-full min-w-0 justify-between overflow-hidden"
               >
                 {selectedFolder ? (
-                  <div className="flex items-center gap-2">
-                    <FolderIcon className="size-4" />
-                    {selectedFolder === "/" ? ROOT_FOLDER_NAME : selectedFolder}
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <FolderIcon className="size-4 shrink-0" />
+                    <span
+                      className="truncate"
+                      title={
+                        selectedFolder === "/"
+                          ? ROOT_FOLDER_NAME
+                          : selectedFolder
+                      }
+                    >
+                      {selectedFolder === "/"
+                        ? ROOT_FOLDER_NAME
+                        : selectedFolder}
+                    </span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
@@ -125,7 +136,7 @@ export function WorkflowMoveDialog({
                 <ChevronDownIcon className="ml-2 size-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="max-h-[300px] w-[--radix-popover-trigger-width] overflow-y-auto p-0">
+            <PopoverContent className="w-[--radix-popover-trigger-width] overflow-hidden p-0">
               <FileTreeCommand
                 items={fileTreeItems}
                 onSelect={handleSelectFolder}

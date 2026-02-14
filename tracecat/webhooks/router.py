@@ -19,19 +19,21 @@ from tracecat.dsl.client import get_temporal_client
 from tracecat.dsl.common import DSLInput
 from tracecat.dsl.workflow import DSLWorkflow
 from tracecat.ee.interactions.enums import InteractionCategory
-from tracecat.ee.interactions.models import InteractionInput
+from tracecat.ee.interactions.schemas import InteractionInput
 from tracecat.identifiers.workflow import AnyWorkflowIDPath, generate_exec_id
 from tracecat.logger import logger
+from tracecat.registry.lock.types import RegistryLock
 from tracecat.webhooks.dependencies import (
+    DraftWorkflowDep,
     PayloadDep,
     ValidWorkflowDefinitionDep,
     parse_content_type,
     parse_interaction_payload,
     validate_incoming_webhook,
 )
-from tracecat.webhooks.models import NDJSON_CONTENT_TYPES
+from tracecat.webhooks.schemas import NDJSON_CONTENT_TYPES
 from tracecat.workflow.executions.enums import TriggerType
-from tracecat.workflow.executions.models import (
+from tracecat.workflow.executions.schemas import (
     ReceiveInteractionResponse,
     WorkflowExecutionCreateResponse,
 )
@@ -48,10 +50,16 @@ class OktaVerificationResponse(TypedDict):
     verification: str
 
 
+type WebhookResponse = (
+    WorkflowExecutionCreateResponse | OktaVerificationResponse | Response
+)
+
+
 # NOTE: Need to set response_model to None to avoid FastAPI trying to parse the response as JSON
 # We need empty status 200 responses for slash command APIs (e.g. Slack)
-@router.api_route("", response_model=None, methods=["GET", "POST"])
-async def incoming_webhook(
+# POST is the primary method for webhook triggering
+@router.post("", response_model=None)
+async def incoming_webhook_post(
     *,
     workflow_id: AnyWorkflowIDPath,
     defn: ValidWorkflowDefinitionDep,
@@ -67,12 +75,71 @@ async def incoming_webhook(
     ),
     request: Request,
     content_type: Annotated[str | None, Header(alias="content-type")] = None,
-) -> WorkflowExecutionCreateResponse | OktaVerificationResponse | Response:
+) -> WebhookResponse:
     """Webhook endpoint to trigger a workflow.
 
     This is an external facing endpoint is used to trigger a workflow by sending a webhook request.
     The workflow is identified by the `path` parameter, which is equivalent to the workflow id.
     """
+    return await _incoming_webhook(
+        workflow_id=workflow_id,
+        defn=defn,
+        payload=payload,
+        echo=echo,
+        empty_echo=empty_echo,
+        vendor=vendor,
+        request=request,
+        content_type=content_type,
+    )
+
+
+# GET is secondary, mainly for webhook verification challenges (e.g., Okta)
+@router.get("", response_model=None)
+async def incoming_webhook_get(
+    *,
+    workflow_id: AnyWorkflowIDPath,
+    defn: ValidWorkflowDefinitionDep,
+    payload: PayloadDep,
+    echo: bool = Query(default=False, description="Echo back to the caller"),
+    empty_echo: bool = Query(
+        default=False,
+        description="Return an empty response. Assumes `echo` to be `True`.",
+    ),
+    vendor: str | None = Query(
+        default=None,
+        description="Vendor specific webhook verification. Supported vendors: `okta`.",
+    ),
+    request: Request,
+    content_type: Annotated[str | None, Header(alias="content-type")] = None,
+) -> WebhookResponse:
+    """Webhook endpoint to trigger a workflow.
+
+    This is an external facing endpoint is used to trigger a workflow by sending a webhook request.
+    The workflow is identified by the `path` parameter, which is equivalent to the workflow id.
+    """
+    return await _incoming_webhook(
+        workflow_id=workflow_id,
+        defn=defn,
+        payload=payload,
+        echo=echo,
+        empty_echo=empty_echo,
+        vendor=vendor,
+        request=request,
+        content_type=content_type,
+    )
+
+
+async def _incoming_webhook(
+    *,
+    workflow_id: AnyWorkflowIDPath,
+    defn: ValidWorkflowDefinitionDep,
+    payload: PayloadDep,
+    echo: bool,
+    empty_echo: bool,
+    vendor: str | None,
+    request: Request,
+    content_type: str | None,
+) -> WebhookResponse:
     logger.info("Webhook hit", path=workflow_id, role=ctx_role.get())
     logger.trace("Webhook payload", payload=payload)
 
@@ -87,11 +154,14 @@ async def incoming_webhook(
         one_response = None
         # Slow release to avoid overwhelming the system
         async for p in cooperative(batched(payload, 8), delay=2):
-            one_response = service.create_workflow_execution_nowait(
+            one_response = await service.create_workflow_execution_wait_for_start(
                 dsl=dsl_input,
                 wf_id=workflow_id,
                 payload=p,
                 trigger_type=TriggerType.WEBHOOK,
+                registry_lock=RegistryLock.model_validate(defn.registry_lock)
+                if defn.registry_lock
+                else None,
             )
         # Currently just return the last response's wf_exec_id
         response = WorkflowExecutionCreateResponse(
@@ -103,11 +173,14 @@ async def incoming_webhook(
         )
 
     else:
-        response = service.create_workflow_execution_nowait(
+        response = await service.create_workflow_execution_wait_for_start(
             dsl=dsl_input,
             wf_id=workflow_id,
             payload=payload,
             trigger_type=TriggerType.WEBHOOK,
+            registry_lock=RegistryLock.model_validate(defn.registry_lock)
+            if defn.registry_lock
+            else None,
         )
 
     # Response handling
@@ -159,9 +232,39 @@ async def incoming_webhook_wait(
         wf_id=workflow_id,
         payload=payload,
         trigger_type=TriggerType.WEBHOOK,
+        registry_lock=RegistryLock.model_validate(defn.registry_lock)
+        if defn.registry_lock
+        else None,
     )
 
     return response["result"]
+
+
+@router.post("/draft", response_model=None)
+async def incoming_webhook_draft(
+    workflow_id: AnyWorkflowIDPath,
+    draft_ctx: DraftWorkflowDep,
+    payload: PayloadDep,
+) -> WorkflowExecutionCreateResponse:
+    """Draft webhook endpoint to trigger a workflow execution using the draft workflow graph.
+
+    This endpoint runs the current (uncommitted) workflow graph rather than the committed definition.
+    Child workflows using aliases will resolve to the latest draft aliases, not committed aliases.
+    """
+    logger.info("Draft webhook hit", path=workflow_id, role=ctx_role.get())
+    logger.trace("Draft webhook payload", payload=payload)
+
+    service = await WorkflowExecutionsService.connect()
+    response = await service.create_draft_workflow_execution_wait_for_start(
+        dsl=draft_ctx.dsl,
+        wf_id=workflow_id,
+        payload=payload,
+        trigger_type=TriggerType.WEBHOOK,
+        registry_lock=RegistryLock.model_validate(draft_ctx.registry_lock)
+        if draft_ctx.registry_lock
+        else None,
+    )
+    return response
 
 
 @router.post("/interactions/{category}")

@@ -5,6 +5,7 @@ import {
   BracesIcon,
   ChevronDownIcon,
   FolderIcon,
+  Plus,
   PlusCircleIcon,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
@@ -14,7 +15,6 @@ import YAML from "yaml"
 import { z } from "zod"
 import { ApiError } from "@/client"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -40,9 +40,10 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
 import type { TracecatApiError } from "@/lib/errors"
 import { useFolders, useWorkflowManager } from "@/lib/hooks"
-import { useWorkspace } from "@/providers/workspace"
+import { useWorkspaceId } from "@/providers/workspace-id"
 
 const importFormSchema = z.object({
   file: z.instanceof(File).refine((file) => file.size <= 5000000, {
@@ -136,6 +137,7 @@ function ImportWorkflowDialog({
                   <FormControl>
                     <Input
                       type="file"
+                      className="min-h-9 py-2"
                       onChange={(e) => {
                         const file = e.target.files?.[0]
                         if (file) {
@@ -156,7 +158,7 @@ function ImportWorkflowDialog({
               render={({ field }) => (
                 <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
                   <FormControl>
-                    <Checkbox
+                    <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
                     />
@@ -205,7 +207,7 @@ function CreateFolderDialog({
   workspaceId: string
   currentFolderPath: string | null
 }) {
-  const { createFolder } = useFolders(workspaceId)
+  const { createFolder } = useFolders(workspaceId, { enabled: open })
 
   const form = useForm<FolderFormValues>({
     resolver: zodResolver(folderFormSchema),
@@ -292,7 +294,7 @@ export function CreateWorkflowButton({
   currentFolderPath: string | null
 }) {
   const router = useRouter()
-  const { workspaceId } = useWorkspace()
+  const workspaceId = useWorkspaceId()
   const { createWorkflow, moveWorkflow } = useWorkflowManager()
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
@@ -318,15 +320,14 @@ export function CreateWorkflowButton({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button
-            role="combobox"
-            className="h-7 items-center space-x-1 bg-emerald-500/80 px-3 py-1 text-xs text-white shadow-sm hover:border-emerald-500 hover:bg-emerald-400/80"
-          >
-            <ChevronDownIcon className="size-3" />
-            <span>Create new</span>
+          <Button variant="outline" size="sm" className="h-7 bg-white">
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            Create new
+            <ChevronDownIcon className="ml-1 h-3.5 w-3.5" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
+          align="end"
           className="
             [&_[data-radix-collection-item]]:flex
             [&_[data-radix-collection-item]]:items-center

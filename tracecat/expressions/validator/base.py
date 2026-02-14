@@ -1,4 +1,7 @@
-from collections.abc import Awaitable, Callable, Iterator
+from __future__ import annotations
+
+import inspect
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any, Literal, override
 
 import jsonpath_ng.exceptions
@@ -10,10 +13,10 @@ from tracecat.expressions import functions
 from tracecat.expressions.common import VISITOR_NODE_TO_EXPR_TYPE, ExprContext, ExprType
 from tracecat.logger import logger
 from tracecat.secrets.constants import DEFAULT_SECRETS_ENVIRONMENT
-from tracecat.validation.models import ExprValidationResult, ValidationDetail
+from tracecat.validation.schemas import ValidationDetail
 
 
-class BaseExprValidator(Visitor):
+class BaseExprValidator[ResultT](Visitor[Token]):
     """Base validator containing common validation logic.
 
     You should not use this class directly, but rather use one of the subclasses.
@@ -30,7 +33,7 @@ class BaseExprValidator(Visitor):
         environment: str = DEFAULT_SECRETS_ENVIRONMENT,
         strict: bool = True,
     ) -> None:
-        self._results: list[ExprValidationResult] = []
+        self._results: list[ResultT] = []
         self._strict = strict
         self._loc: tuple[str | int, ...] = ("expression",)
         self._environment = environment
@@ -47,27 +50,22 @@ class BaseExprValidator(Visitor):
         ref: str | None = None,
         loc: tuple[str | int, ...] | None = None,
     ) -> None:
-        self._results.append(
-            ExprValidationResult(
-                status=status,
-                msg=msg,
-                expression_type=type,
-                ref=ref,
-                expression=".".join(map(str, loc or self._loc)),
-            )
-        )
+        """Record a validation result."""
+        raise NotImplementedError
 
-    def results(self) -> Iterator[ExprValidationResult]:
+    def results(self) -> Iterable[ResultT]:
         """Return all validation results."""
-        yield from self._results
+        return self._results
 
-    def errors(self) -> list[ExprValidationResult]:
+    def errors(self) -> Sequence[ResultT]:
         """Return all validation errors."""
-        return [res for res in self.results() if res.status == "error"]
+        return [
+            res for res in self.results() if getattr(res, "status", None) == "error"
+        ]
 
     def visit_with_locator(
         self,
-        tree: Tree,
+        tree: Tree[Token],
         loc: tuple[str | int, ...] | None = None,
         exclude: set[ExprType] | None = None,
     ) -> Any:
@@ -76,7 +74,7 @@ class BaseExprValidator(Visitor):
         return self.visit(tree)
 
     @override
-    def visit(self, tree: Tree) -> Any:
+    def visit(self, tree: Tree[Token]) -> Any:
         try:
             if VISITOR_NODE_TO_EXPR_TYPE.get(tree.data) in self._exclude:
                 logger.trace("Skipping node", node=tree.data)
@@ -94,10 +92,10 @@ class BaseExprValidator(Visitor):
 
     """Visitors"""
 
-    def root(self, node: Tree):
+    def root(self, node: Tree[Token]):
         self.logger.trace("Visiting root:", node=node)
 
-    def trailing_typecast_expression(self, node: Tree):
+    def trailing_typecast_expression(self, node: Tree[Token]):
         _, typename = node.children
         self.logger.trace("Visit trailing cast expression", typename=typename)
         if typename not in functions.BUILTIN_TYPE_MAPPING:
@@ -110,42 +108,35 @@ class BaseExprValidator(Visitor):
         else:
             self.add(status="success", type=ExprType.TYPECAST)
 
-    def actions(self, node: Tree[Token]):
+    def actions(self, _node: Tree[Token]):
         self.add(
             status="error",
             type=ExprType.ACTION,
             msg=f"ACTIONS expressions are not supported in {self._expr_kind}",
         )
 
-    def inputs(self, node: Tree[Token]):
-        self.add(
-            status="error",
-            type=ExprType.INPUT,
-            msg=f"INPUTS expressions are not supported in {self._expr_kind}",
-        )
-
-    def trigger(self, node: Tree):
+    def trigger(self, _node: Tree[Token]):
         self.add(
             status="error",
             type=ExprType.TRIGGER,
             msg=f"TRIGGER expressions are not supported in {self._expr_kind}",
         )
 
-    def env(self, node: Tree):
+    def env(self, _node: Tree[Token]):
         self.add(
             status="error",
             type=ExprType.ENV,
             msg=f"ENV expressions are not supported in {self._expr_kind}",
         )
 
-    def local_vars(self, node: Tree):
+    def local_vars(self, _node: Tree[Token]):
         self.add(
             status="error",
             type=ExprType.LOCAL_VARS,
             msg=f"var expressions are not supported in {self._expr_kind}",
         )
 
-    def iterator(self, node: Tree):
+    def iterator(self, node: Tree[Token]):
         self.logger.trace("Visit iterator expression", node=node)
         self.add(
             status="error",
@@ -185,6 +176,27 @@ class BaseExprValidator(Visitor):
         name, key = parts
         return name, key
 
+    def vars(self, node: Tree[Token]) -> tuple[str, str | None] | None:
+        self.logger.trace("Visit vars expression", expr=node)
+
+        expr = node.children[0]
+        if not isinstance(expr, Token):
+            raise ValueError("Expected a string token")
+
+        var_path = expr.lstrip(".")
+        if not var_path:
+            self.add(
+                status="error",
+                msg="Invalid variable usage: Expected `VARS.my_variable.KEY`",
+                type=ExprType.VARIABLE,
+            )
+            return None
+        if "." in var_path:
+            name, remainder = var_path.split(".", 1)
+        else:
+            name, remainder = var_path, None
+        return name, remainder
+
     def function(self, node: Tree[Token]):
         fn_name = node.children[0]
         if not isinstance(fn_name, Token):
@@ -198,16 +210,98 @@ class BaseExprValidator(Visitor):
             node=node,
         )
 
-        if fn_name not in functions.FUNCTION_MAPPING:
+        # 1. Verify that the function exists in FUNCTION_MAPPING
+        func = functions.FUNCTION_MAPPING.get(fn_name)
+        if func is None:
             self.add(
                 status="error",
                 msg=f"Unknown function name {str(fn_name)!r}",
                 type=ExprType.FUNCTION,
             )
-        else:
-            self.add(status="success", type=ExprType.FUNCTION)
+            return
 
-    def ternary(self, node: Tree):
+        # 2. Validate argument count (positional only – keyword args are not supported
+        #    in template expressions).
+        #    We deliberately keep the logic simple:
+        #    * Ensure the number of provided arguments is **at least** the number of
+        #      required positional parameters.
+        #    * If the function does **not** declare *args, ensure we don't pass more
+        #      arguments than positional parameters (including those with defaults).
+
+        # Extract argument list from the parse tree (may be missing for zero-arg calls)
+        arg_list_node = node.children[1] if len(node.children) > 1 else None
+        provided_arg_count = 0
+        if isinstance(arg_list_node, Tree) and arg_list_node.data == "arg_list":
+            # Children of arg_list include both the argument expressions and literal comma
+            # tokens that separate them (","), e.g. [expr1, ',', expr2]. We need to
+            # consider only the actual expressions.
+            provided_arg_count = sum(
+                1
+                for child in arg_list_node.children
+                # Exclude separator tokens injected by the grammar
+                if not (isinstance(child, Token) and child.value == ",")
+            )
+
+        # Retrieve the original wrapped function (mappable decorator keeps original in
+        # __wrapped__). Fallback to the function itself if __wrapped__ is absent.
+
+        original_func = getattr(func, "__wrapped__", func)
+        sig = inspect.signature(original_func)
+
+        required_positional = [
+            p
+            for p in sig.parameters.values()
+            if p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and p.default is inspect.Parameter.empty
+        ]
+
+        max_positional = [
+            p
+            for p in sig.parameters.values()
+            if p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+
+        # Determine if the function accepts *args
+        has_varargs = any(
+            p.kind == inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values()
+        )
+
+        # Validate minimum argument count
+        if provided_arg_count < len(required_positional):
+            self.add(
+                status="error",
+                msg=(
+                    f"Function {fn_name!r} expects at least {len(required_positional)} "
+                    f"argument(s) but {provided_arg_count} were provided"
+                ),
+                type=ExprType.FUNCTION,
+            )
+            return
+
+        # Validate maximum argument count only if *args not present
+        if not has_varargs and provided_arg_count > len(max_positional):
+            self.add(
+                status="error",
+                msg=(
+                    f"Function {fn_name!r} accepts at most {len(max_positional)} "
+                    f"argument(s) but {provided_arg_count} were provided"
+                ),
+                type=ExprType.FUNCTION,
+            )
+            return
+
+        # If we reach here, the function reference and argument count are valid
+        self.add(status="success", type=ExprType.FUNCTION)
+
+    def ternary(self, node: Tree[Token]):
         cond_expr, true_expr, false_expr = node.children
         self.logger.trace(
             "Visit ternary expression",
@@ -234,7 +328,7 @@ class BaseExprValidator(Visitor):
             raise ValueError("Expected a tree")
         if child.data == "literal":
             try:
-                functions.cast(child.children[0], typename)
+                functions.cast(child.children[0], str(typename))
             except ValueError as e:
                 self.add(
                     status="error",
@@ -244,20 +338,21 @@ class BaseExprValidator(Visitor):
         else:
             self.add(status="success", type=ExprType.TYPECAST)
 
-    def literal(self, node: Tree):
+    def literal(self, node: Tree[Token]):
         self.logger.trace("Visit literal expression", value=node.children[0])
         self.add(status="success", type=ExprType.LITERAL)
 
     def jsonpath_expression(self, node: Tree[Token]):
         self.logger.trace("Visiting jsonpath expression", children=node.children)
         try:
-            combined_segments = "".join(node.children)  # type: ignore
+            combined_segments = "".join(str(child) for child in node.children)
         except (AttributeError, ValueError) as e:
             self.logger.error("Invalid jsonpath segments", error=str(e))
             self.add(
                 status="error",
                 msg="Couldn't combine jsonpath expression segments: " + str(e),
             )
+            return
         try:
             jsonpath_ng.ext.parse("$" + combined_segments)
         except jsonpath_ng.exceptions.JSONPathError as e:

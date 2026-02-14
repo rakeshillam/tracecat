@@ -8,9 +8,11 @@ node_modules/
 .tracecat/
 .dev/
 .llm/
+.v0/
+.trees/
+.worktrees/
 
 # UV
-uv.lock
 
 # Terraform-related files
 *.tfstate
@@ -45,6 +47,10 @@ _private_key.pem
 *.env
 *.zip
 *.tar.gz
+# Ignore all .env files except .env.example
+.env*
+!.env.example
+
 
 # Editor and IDE-specific files
 .vscode/

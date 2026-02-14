@@ -2,14 +2,24 @@ import json
 import logging
 import os
 from logging.config import fileConfig
+from urllib.parse import quote_plus
 
-import alembic_postgresql_enum  # noqa: F401
+import alembic_postgresql_enum
 import boto3
 from sqlalchemy import engine_from_config, pool
-from sqlmodel import SQLModel
 
 from alembic import context
-from tracecat.db import schemas  # noqa: F401
+from tracecat.db import models  # noqa: F401
+from tracecat.db.migration_lock import (
+    acquire_migration_advisory_lock,
+    release_migration_advisory_lock,
+)
+
+alembic_postgresql_enum.set_configuration(
+    alembic_postgresql_enum.Config(
+        add_type_ignore=True,
+    )
+)
 
 TRACECAT__DB_URI = os.getenv("TRACECAT__DB_URI")
 if not TRACECAT__DB_URI:
@@ -17,6 +27,7 @@ if not TRACECAT__DB_URI:
     host = os.getenv("TRACECAT__DB_ENDPOINT")
     port = os.getenv("TRACECAT__DB_PORT", 5432)
     database = os.getenv("TRACECAT__DB_NAME", "postgres")
+    sslmode = os.getenv("TRACECAT__DB_SSLMODE", "require")
 
     # Check if in AWS environment
     if os.getenv("TRACECAT__DB_PASS__ARN"):
@@ -24,13 +35,26 @@ if not TRACECAT__DB_URI:
         session = boto3.Session()
         client = session.client("secretsmanager")
         response = client.get_secret_value(SecretId=os.getenv("TRACECAT__DB_PASS__ARN"))
-        password = json.loads(response["SecretString"])["password"]
+        secret_string = response["SecretString"]
+        try:
+            payload = json.loads(secret_string)
+        except json.JSONDecodeError:
+            payload = None
+
+        if isinstance(payload, dict):
+            password = payload["password"]
+            username = payload.get("username") or username
+        else:
+            password = secret_string
     else:
         logging.info("Fetching database password from environment variable")
         password = os.getenv("TRACECAT__DB_PASS")
 
+    user = quote_plus("" if username is None else str(username))
+    pwd = quote_plus("" if password is None else str(password))
     TRACECAT__DB_URI = (
-        f"postgresql+psycopg://{username}:{password}@{host}:{port!s}/{database}"
+        f"postgresql+psycopg://{user}:{pwd}@{host}:{port!s}/{database}"
+        f"?sslmode={sslmode}"
     )
 
 
@@ -47,7 +71,7 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = SQLModel.metadata
+target_metadata = models.Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -80,8 +104,18 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
 
-        with context.begin_transaction():
-            context.run_migrations()
+        has_advisory_lock = acquire_migration_advisory_lock(connection)
+        try:
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if has_advisory_lock:
+                try:
+                    release_migration_advisory_lock(connection)
+                except Exception:
+                    logging.exception(
+                        "Failed to release Alembic advisory lock; continuing cleanup"
+                    )
 
 
 if context.is_offline_mode():

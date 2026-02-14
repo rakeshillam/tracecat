@@ -1,18 +1,36 @@
+/**
+ * Icon registry and helpers.
+ *
+ * Categories:
+ * - `Icons`: general UI/brand glyphs.
+ * - `UDFIcons`: action icons keyed by registry action (trigger/core/tools/llm/ai).
+ * - `providerIcons`: provider badges.
+ * - `secretIcons`: credential type badges.
+ *
+ * Adding/reusing icons:
+ * - Prefer reusing existing vendor icon components across categories.
+ * - For `UDFIcons`, register entries via `createIconRenderer` for consistent
+ *   wrapper/size handling; use `wrapperClassName`/`iconClassName` for tweaks.
+ * - Use a custom renderer only when an icon needs overlays or extra layout.
+ */
 import {
   Blend,
-  BoxesIcon,
+  BlocksIcon,
   BoxIcon,
   Building2Icon,
   Code,
   Cpu,
+  DatabaseIcon,
   Globe,
+  KeyRound,
   ListChecks,
-  Mail,
+  MailIcon,
   MergeIcon,
   MessageCircleMore,
   MessageCirclePlus,
+  Plug2,
   RefreshCcw,
-  Send,
+  SendIcon,
   ShieldAlert,
   ShieldPlus,
   Sparkles,
@@ -26,13 +44,16 @@ import {
 import { cn } from "@/lib/utils"
 
 type IconProps = React.HTMLAttributes<SVGElement>
-type CustomIconProps = IconProps & { flairsize?: "sm" | "md" | "lg" }
+type CustomIconProps = IconProps & {
+  flairsize?: "sm" | "md" | "lg"
+  iconClassName?: string
+}
 
 export const Icons = {
   logo: (props: IconProps) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 27" {...props}>
       <path
-        fill="currentColor"
+        fill="#000000"
         d="M12.3822 3.53999C12.054 4.02329 11.7313 4.53498 11.5029 4.91328L11.1972 5.41953L10.6118 5.50502C6.02493 6.17496 2.50435 10.1209 2.50435 14.8838C2.50435 20.1177 6.75443 24.363 12 24.363C17.2456 24.363 21.4957 20.1177 21.4957 14.8838C21.4957 13.5676 21.2276 12.317 20.7443 11.1811L23.0489 10.2015C23.6616 11.6415 24 13.2248 24 14.8838C24 21.5026 18.6262 26.866 12 26.866C5.37385 26.866 0 21.5026 0 14.8838C0 9.06384 4.15393 4.21622 9.66122 3.12927C9.96291 2.64898 10.3338 2.08367 10.689 1.59239C10.9283 1.26149 11.1866 0.927598 11.4273 0.67256C11.5426 0.550492 11.6976 0.399017 11.8781 0.276051C11.9682 0.214659 12.1098 0.128874 12.292 0.0696269C12.4715 0.0112944 12.7876 -0.0518963 13.1495 0.0685454C13.6061 0.220489 13.8519 0.558613 13.9453 0.69853C14.061 0.872024 14.1436 1.05531 14.2004 1.19425C14.2891 1.41119 14.3768 1.67991 14.4485 1.89969C14.4664 1.95427 14.4832 2.00584 14.4988 2.05285C14.5614 2.24116 14.6139 2.38741 14.6599 2.49826C15.5671 2.71414 16.9787 3.09593 17.9405 3.35607C17.9842 3.36788 18.0269 3.37943 18.0686 3.39071C18.3616 3.18553 18.7003 2.96937 19.0405 2.79063C19.3212 2.64317 19.6625 2.48908 20.0139 2.40633C20.3048 2.33782 20.9445 2.23484 21.5187 2.64313L21.9696 2.96371L22.036 3.51276C22.3815 6.36928 21.5919 9.66699 19.9031 11.8337C19.0456 12.9339 17.8926 13.8186 16.4631 14.1044C15.0114 14.3947 13.4757 14.0273 11.9567 13.0019L13.3583 10.9276C14.4482 11.6633 15.3117 11.782 15.9718 11.65C16.6542 11.5136 17.3256 11.0676 17.9275 10.2955C18.8835 9.0689 19.5007 7.21641 19.5982 5.37671C19.4144 5.50192 19.2444 5.62833 19.1112 5.7347L18.6176 6.1289L18.0072 5.96636C17.8011 5.91149 17.5325 5.83889 17.2281 5.75659C16.1191 5.45678 14.5341 5.02828 13.7587 4.85956C13.3554 4.77179 13.0724 4.54607 12.8974 4.36146C12.723 4.17742 12.5993 3.97563 12.5127 3.81222C12.466 3.72423 12.4226 3.63249 12.3822 3.53999ZM20.5964 4.84095C20.5964 4.84098 20.5952 4.84122 20.593 4.84157C20.5953 4.84109 20.5964 4.84092 20.5964 4.84095Z"
       />
     </svg>
@@ -54,6 +75,14 @@ export const Icons = {
         fill="currentColor"
         d="M409.132 114.573c-19.608-33.596-46.205-60.194-79.798-79.8-33.598-19.607-70.277-29.408-110.063-29.408-39.781 0-76.472 9.804-110.063 29.408-33.596 19.605-60.192 46.204-79.8 79.8C9.803 148.168 0 184.854 0 224.63c0 47.78 13.94 90.745 41.827 128.906 27.884 38.164 63.906 64.572 108.063 79.227 5.14.954 8.945.283 11.419-1.996 2.475-2.282 3.711-5.14 3.711-8.562 0-.571-.049-5.708-.144-15.417a2549.81 2549.81 0 01-.144-25.406l-6.567 1.136c-4.187.767-9.469 1.092-15.846 1-6.374-.089-12.991-.757-19.842-1.999-6.854-1.231-13.229-4.086-19.13-8.559-5.898-4.473-10.085-10.328-12.56-17.556l-2.855-6.57c-1.903-4.374-4.899-9.233-8.992-14.559-4.093-5.331-8.232-8.945-12.419-10.848l-1.999-1.431c-1.332-.951-2.568-2.098-3.711-3.429-1.142-1.331-1.997-2.663-2.568-3.997-.572-1.335-.098-2.43 1.427-3.289 1.525-.859 4.281-1.276 8.28-1.276l5.708.853c3.807.763 8.516 3.042 14.133 6.851 5.614 3.806 10.229 8.754 13.846 14.842 4.38 7.806 9.657 13.754 15.846 17.847 6.184 4.093 12.419 6.136 18.699 6.136 6.28 0 11.704-.476 16.274-1.423 4.565-.952 8.848-2.383 12.847-4.285 1.713-12.758 6.377-22.559 13.988-29.41-10.848-1.14-20.601-2.857-29.264-5.14-8.658-2.286-17.605-5.996-26.835-11.14-9.235-5.137-16.896-11.516-22.985-19.126-6.09-7.614-11.088-17.61-14.987-29.979-3.901-12.374-5.852-26.648-5.852-42.826 0-23.035 7.52-42.637 22.557-58.817-7.044-17.318-6.379-36.732 1.997-58.24 5.52-1.715 13.706-.428 24.554 3.853 10.85 4.283 18.794 7.952 23.84 10.994 5.046 3.041 9.089 5.618 12.135 7.708 17.705-4.947 35.976-7.421 54.818-7.421s37.117 2.474 54.823 7.421l10.849-6.849c7.419-4.57 16.18-8.758 26.262-12.565 10.088-3.805 17.802-4.853 23.134-3.138 8.562 21.509 9.325 40.922 2.279 58.24 15.036 16.18 22.559 35.787 22.559 58.817 0 16.178-1.958 30.497-5.853 42.966-3.9 12.471-8.941 22.457-15.125 29.979-6.191 7.521-13.901 13.85-23.131 18.986-9.232 5.14-18.182 8.85-26.84 11.136-8.662 2.286-18.415 4.004-29.263 5.146 9.894 8.562 14.842 22.077 14.842 40.539v60.237c0 3.422 1.19 6.279 3.572 8.562 2.379 2.279 6.136 2.95 11.276 1.995 44.163-14.653 80.185-41.062 108.068-79.226 27.88-38.161 41.825-81.126 41.825-128.906-.01-39.771-9.818-76.454-29.414-110.049z"
       ></path>
+    </svg>
+  ),
+  microsoft: (props: IconProps) => (
+    <svg viewBox="0 0 88 88" {...props}>
+      <path fill="#f25022" d="M0 0h41.39v41.39H0z"></path>
+      <path fill="#00a4ef" d="M46.61 0H88v41.39H46.61z"></path>
+      <path fill="#7fba00" d="M0 46.61h41.39V88H0z"></path>
+      <path fill="#ffb900" d="M46.61 46.61H88V88H46.61z"></path>
     </svg>
   ),
   radix: (props: IconProps) => (
@@ -207,14 +236,27 @@ export function getIcon(key: string, props?: CustomIconProps): JSX.Element {
 }
 export const basicIconsCommon =
   "flex p-1 shrink-0 rounded-full items-center justify-center bg-stone-200/50"
+
+function createIconRenderer(
+  Icon: (props: IconProps) => JSX.Element,
+  options?: { wrapperClassName?: string; iconClassName?: string }
+) {
+  return ({
+    className,
+    iconClassName,
+    flairsize: _unusedFlairSize,
+    ...rest
+  }: CustomIconProps) => (
+    <div className={cn(basicIconsCommon, options?.wrapperClassName, className)}>
+      <Icon
+        {...rest}
+        className={cn("size-full", options?.iconClassName, iconClassName)}
+      />
+    </div>
+  )
+}
 export const UDFIcons: Record<string, (props: CustomIconProps) => JSX.Element> =
   {
-    // Generic Group
-    group: ({ className, ...rest }) => (
-      <div className={cn(basicIconsCommon, "bg-slate-200/50", className)}>
-        <BoxesIcon {...rest} />
-      </div>
-    ),
     // Triggers namespace
     trigger: ({ className, ...rest }) => (
       <div className={cn(basicIconsCommon, "bg-indigo-100", className)}>
@@ -283,17 +325,17 @@ export const UDFIcons: Record<string, (props: CustomIconProps) => JSX.Element> =
     ),
     "core.receive_email": ({ className, ...rest }) => (
       <div className={cn(basicIconsCommon, "bg-purple-100", className)}>
-        <Mail {...rest} />
+        <MailIcon {...rest} />
       </div>
     ),
     "core.send_email": ({ className, ...rest }) => (
       <div className={cn(basicIconsCommon, "bg-lime-100", className)}>
-        <Send {...rest} />
+        <SendIcon {...rest} />
       </div>
     ),
     "core.send_email_smtp": ({ className, ...rest }) => (
       <div className={cn(basicIconsCommon, "bg-lime-100", className)}>
-        <Send {...rest} />
+        <SendIcon {...rest} />
       </div>
     ),
     "core.script": ({ className, ...rest }) => (
@@ -307,7 +349,7 @@ export const UDFIcons: Record<string, (props: CustomIconProps) => JSX.Element> =
         <WandSparkles {...rest} />
         <Sparkles
           className={cn(
-            "-translate-y-1/8 translate-x-1/8 absolute right-0 top-0 fill-yellow-500/70 text-amber-500/70",
+            "absolute top-0 right-0 -translate-y-1/8 translate-x-1/8 fill-yellow-500/70 text-amber-500/70",
             getFlairSize(flairsize)
           )}
         />
@@ -323,130 +365,338 @@ export const UDFIcons: Record<string, (props: CustomIconProps) => JSX.Element> =
         <Table {...rest} />
       </div>
     ),
-    // AWS namespace
-    aws_cloudtrail: ({ className, ...rest }: IconProps) => (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="100%"
-        height="100%"
-        viewBox="0 0 80 80"
-        version="1.1"
-        className={cn("rounded-full", className)}
-        {...rest}
-      >
-        <defs>
-          <linearGradient
-            x1="0%"
-            y1="100%"
-            x2="100%"
-            y2="0%"
-            id="linearGradient-1"
-          >
-            <stop stopColor="#B0084D" offset="0%" />
-            <stop stopColor="#FF4F8B" offset="100%" />
-          </linearGradient>
-        </defs>
-        <g
-          id="Icon-Architecture/64/Arch_AWS-Cloud-Trail_64"
-          stroke="none"
-          strokeWidth="1"
-          fill="none"
-          fillRule="evenodd"
-        >
-          <g
-            id="Icon-Architecture-BG/64/Management-Governance"
-            fill="url(#linearGradient-1)"
-          >
-            <rect id="Rectangle" x="0" y="0" width="80" height="80" />
-          </g>
-          <path
-            d="M25,52.996052 L29,52.996052 L29,50.994078 L25,50.994078 L25,52.996052 Z M59.971,38.1634268 C59.746,35.1264322 58.261,32.8902273 55.902,32.1004485 C54.003,31.4668238 51.911,31.914265 50.318,33.2125451 C49.352,31.3076668 47.9,29.4418271 46.702,28.2596615 C42.406,24.0194805 37.668,22.9384146 32.616,25.0454922 C28.106,26.9223428 24,33.0874217 24,37.9812471 L24,38.1714347 C21.293,39.0863368 19.109,41.0742969 18.074,43.608796 L19.926,44.3655422 C21.245,41.1353571 24.332,40.1223583 25.247,39.8891283 C25.69,39.7760168 26,39.376623 26,38.9191719 L26,37.9812471 C26,33.9362587 29.657,28.444844 33.385,26.8933142 C37.68,25.1025485 41.578,26.0114447 45.298,29.6850669 C46.88,31.2456057 48.427,33.5608886 49.06,35.3176207 C49.184,35.6639622 49.488,35.913208 49.852,35.9682623 C50.212,36.0233166 50.577,35.8741695 50.799,35.5798793 C51.904,34.1104304 53.696,33.4738027 55.269,33.9993209 C57.004,34.5808943 58,36.3966847 58,38.9822341 C58,39.4717168 58.354,39.8891283 58.836,39.9692073 C59.569,40.0913277 66,41.3515703 66,47.9911171 C66,54.8678977 59.281,54.996024 59,54.998026 L36,54.998026 L36,57 L59.002,57 C62.114,56.9939941 68,55.1041306 68,47.9911171 C68,41.7839967 63.279,38.989241 59.971,38.1634268 L59.971,38.1634268 Z M31,52.996052 L45,52.996052 L45,50.994078 L31,50.994078 L31,52.996052 Z M27,57 L33,57 L33,54.998026 L27,54.998026 L27,57 Z M12,57 L15,57 L15,54.998026 L12,54.998026 L12,57 Z M15,48.9921041 L24,48.9921041 L24,46.9901301 L15,46.9901301 L15,48.9921041 Z M13,52.996052 L23,52.996052 L23,50.994078 L13,50.994078 L13,52.996052 Z M27,48.9921041 L34,48.9921041 L34,46.9901301 L27,46.9901301 L27,48.9921041 Z M17,57 L25,57 L25,54.998026 L17,54.998026 L17,57 Z"
-            id="AWS-Cloud-Trail_Icon_64_Squid"
-            fill="#FFFFFF"
-          />
-        </g>
-      </svg>
+    "core.sql": ({ className, ...rest }) => (
+      <div className={cn(basicIconsCommon, "bg-sky-200/50", className)}>
+        <DatabaseIcon {...rest} />
+      </div>
     ),
-    "tools.datadog": (props: IconProps) => <DatadogIcon {...props} />,
+    tools: createIconRenderer((props: IconProps) => <BlocksIcon {...props} />),
+    "tools.datadog": createIconRenderer(DatadogIcon),
     // Emailrep namespace
-    emailrep: (props: IconProps) => (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="150"
-        height="100"
-        viewBox="0 0 34 23"
-        fill="none"
-        {...props}
-      >
-        <path
-          fillRule="evenodd"
-          clipRule="evenodd"
-          d="M0.0997772 11.5L8.34994 19.6435C12.8838 24.1188 20.3157 24.1188 24.8496 19.6435L29.436 15.1163L28.5201 14.2122L27.6043 13.3082L25.7724 11.5L23.0397 8.80266L21.186 6.97293C18.6742 4.49361 14.5253 4.49361 12.0136 6.97293L11.0908 7.88375L12.9227 9.69178L13.8454 8.78111C15.3458 7.29999 17.8537 7.29999 19.3541 8.78111L19.5341 8.95872L21.2078 10.6108L22.1087 11.5L23.9405 13.3082L25.7724 15.1163L23.0179 17.8353C19.4949 21.3126 13.7045 21.3126 10.1816 17.8353L5.59527 13.3082L3.76341 11.5L1.93167 9.69178L0.0997772 11.5ZM7.42719 7.88375L9.25906 9.69178L11.0908 11.5L11.5522 11.9553L13.3839 13.7635L13.8454 14.2189C15.3458 15.7001 17.8537 15.7001 19.3541 14.2189L20.2769 13.3082L22.1087 15.1163L21.186 16.0271C18.6742 18.5064 14.5253 18.5064 12.0136 16.0271L9.72027 13.7635L7.42719 11.5L5.59527 9.69178L4.23987 8.35405L3.76341 7.88375L8.34994 3.35648C12.8838 -1.11883 20.3157 -1.11883 24.8496 3.35648L33.0998 11.5L31.2679 13.3082L29.436 11.5L27.7385 9.82443L23.0179 5.16469C19.4949 1.68739 13.7045 1.68739 10.1816 5.16469L7.42719 7.88375ZM14.7546 11.5L15.6772 12.4108C16.1666 12.8938 17.0329 12.8938 17.5224 12.4108L18.445 11.5L17.5224 10.5892C17.0329 10.1062 16.1666 10.1062 15.6772 10.5892L14.7546 11.5Z"
-          fill="#00C292"
-          fillOpacity="0.8"
-        />
-      </svg>
-    ),
+    "tools.emailrep": createIconRenderer(EmailrepIcon, {
+      iconClassName: "h-auto w-full",
+    }),
     // Sublime namespace
-    sublime: (props: IconProps) => (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="150"
-        height="100"
-        viewBox="0 0 34 23"
-        fill="none"
-        {...props}
-      >
-        <path
-          fillRule="evenodd"
-          clipRule="evenodd"
-          d="M0.0997772 11.5L8.34994 19.6435C12.8838 24.1188 20.3157 24.1188 24.8496 19.6435L29.436 15.1163L28.5201 14.2122L27.6043 13.3082L25.7724 11.5L23.0397 8.80266L21.186 6.97293C18.6742 4.49361 14.5253 4.49361 12.0136 6.97293L11.0908 7.88375L12.9227 9.69178L13.8454 8.78111C15.3458 7.29999 17.8537 7.29999 19.3541 8.78111L19.5341 8.95872L21.2078 10.6108L22.1087 11.5L23.9405 13.3082L25.7724 15.1163L23.0179 17.8353C19.4949 21.3126 13.7045 21.3126 10.1816 17.8353L5.59527 13.3082L3.76341 11.5L1.93167 9.69178L0.0997772 11.5ZM7.42719 7.88375L9.25906 9.69178L11.0908 11.5L11.5522 11.9553L13.3839 13.7635L13.8454 14.2189C15.3458 15.7001 17.8537 15.7001 19.3541 14.2189L20.2769 13.3082L22.1087 15.1163L21.186 16.0271C18.6742 18.5064 14.5253 18.5064 12.0136 16.0271L9.72027 13.7635L7.42719 11.5L5.59527 9.69178L4.23987 8.35405L3.76341 7.88375L8.34994 3.35648C12.8838 -1.11883 20.3157 -1.11883 24.8496 3.35648L33.0998 11.5L31.2679 13.3082L29.436 11.5L27.7385 9.82443L23.0179 5.16469C19.4949 1.68739 13.7045 1.68739 10.1816 5.16469L7.42719 7.88375ZM14.7546 11.5L15.6772 12.4108C16.1666 12.8938 17.0329 12.8938 17.5224 12.4108L18.445 11.5L17.5224 10.5892C17.0329 10.1062 16.1666 10.1062 15.6772 10.5892L14.7546 11.5Z"
-          fill="#00C292"
-          fillOpacity="0.8"
-        />
-      </svg>
-    ),
+    "tools.sublime": createIconRenderer(SublimeIcon, {
+      iconClassName: "h-auto w-full",
+    }),
     // URLScan namespace
-    "tools.urlscan": (props: IconProps) => <UrlscanIcon {...props} />,
-    "tools.virustotal": ({ className, ...rest }: IconProps) => (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="100%"
-        height="100%"
-        viewBox="0 0 1024 1024"
-        preserveAspectRatio="xMidYMid meet"
-        className={cn(basicIconsCommon, className)}
-        {...rest}
-      >
-        <circle cx="512" cy="512" r="512" style={{ fill: "#394eff" }} />
-        <path
-          d="M256.1 300.7 468 512.2 256.1 723.3h467.8V300.7H256.1zM678.7 678h-316l167.1-165.8L362.7 346h315.9c.1 0 .1 332 .1 332z"
-          style={{ fill: "#fff" }}
-        />
-      </svg>
+    "tools.urlscan": createIconRenderer(UrlscanIcon),
+    "tools.virustotal": createIconRenderer(VirusTotalIcon),
+    "tools.pagerduty": createIconRenderer(PagerDutyToolIcon, {
+      wrapperClassName: "rounded-xl",
+    }),
+    "tools.gophish": createIconRenderer(GophishToolIcon, {
+      wrapperClassName: "rounded-full",
+      iconClassName: "h-full w-auto",
+    }),
+    "tools.servicenow": createIconRenderer(ServiceNowIcon),
+    "tools.slack": createIconRenderer(SlackIcon),
+    "tools.slack_blocks": createIconRenderer(SlackIcon),
+    "tools.jira": createIconRenderer(JiraIcon),
+    "tools.github": createIconRenderer(GitHubIcon),
+    "tools.microsoft_defender_endpoint": createIconRenderer(
+      MicrosoftDefenderIcon
     ),
-    // Project Discovery namespace
-    project_discovery: ({ className, ...rest }: IconProps) => (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="100%"
-        height="100%"
-        version="1.0"
-        viewBox="0 0 200 200"
-        className={cn("rounded-full", className)}
-        {...rest}
-      >
-        <path d="M0 100v100h200V0H0v100zm126.5-53.1c3.9 1 9.1 2.7 11.8 3.9 3.8 1.7 4.7 2.6 4.7 4.6 0 1.4-1 3.5-2.2 4.6-2.6 2.4-3.6 2.4-16.8-1-17.3-4.4-32.9-1.4-41.4 8-5.7 6.3-7.9 11.6-8.4 20-.5 8.8 1.8 15.7 6.9 20.6 4.4 4.2 3.5 9.1-2.2 10.9-4.1 1.3-11.6-6.8-15.1-16.3-2.4-6.5-2.3-18.4.1-26.1 3.3-10.6 11.8-21.3 20.6-25.9 10.4-5.4 28.4-6.9 42-3.3zM59.9 59.6c2.6 1.9 2.6 2.4-.9 14.4-2.7 9.6-2.9 23.3-.5 30.5 7.5 21.6 34.6 29.7 48.9 14.6 3.6-3.8 7.8-4.1 10-.9 2.4 3.4 1.9 5.5-2.4 10.2-10.6 11.5-28.7 13.7-45.4 5.6-11.1-5.4-19-14.8-22.7-27.1-4.4-14.4-.5-44.3 6.1-47.6 3.3-1.7 4.1-1.6 6.9.3zm59.3 2.5c24.7 5.1 39.1 27.4 35.9 55.3-2.3 19.8-8.1 28.5-15.2 22.7l-2.3-1.8 2.6-8.9c3.4-11.2 4.2-19.2 2.9-27.3-1.9-11.8-8.5-21.1-18.4-25.6-11.5-5.4-22.2-4-31.5 4-3 2.5-5.8 4.5-6.3 4.5-1.8 0-5.9-4.9-5.9-6.9 0-2.8 5.3-8.6 10.8-11.8 8-4.7 17.7-6.2 27.4-4.2zm10 23.7c14.3 15.8 11.8 41.7-5.6 58-7.3 6.8-13.7 9.7-25 11.2-15.9 2.2-41.6-4.3-41.6-10.4 0-.7 1-2.6 2.1-4.1 2.5-3.1 4.1-3.1 15.4.4 8.8 2.7 23.8 3.1 30.4.7 21.2-7.7 28.8-35.3 13.7-49.5-4.6-4.3-2.3-10.1 3.9-10.1 2.5 0 4.1.9 6.7 3.8z" />
-      </svg>
+    "tools.microsoft_defender_xdr": createIconRenderer(MicrosoftDefenderIcon),
+    "tools.microsoft_entra": createIconRenderer(MicrosoftEntraIcon),
+    "tools.microsoft_teams": createIconRenderer(MicrosoftTeamsIcon),
+    "tools.microsoft_sentinel": createIconRenderer(MicrosoftSentinelIcon),
+    "tools.azure_log_analytics": createIconRenderer(AzureLogAnalyticsIcon),
+    "tools.google_sheets": createIconRenderer(GoogleSheetsIcon),
+    "tools.google_docs": createIconRenderer(GoogleDocsIcon),
+    "tools.google_drive": createIconRenderer(GoogleDriveIcon),
+    "tools.gmail": createIconRenderer(GmailIcon),
+    "tools.google_secops_detection": createIconRenderer(
+      GoogleSecOpsDetectionIcon
     ),
-    "tools.slack": (props: IconProps) => <SlackIcon {...props} />,
-    "tools.slack_blocks": (props: IconProps) => <SlackIcon {...props} />,
-    "llm.openai": (props: IconProps) => <OpenAIIcon {...props} />,
-    "llm.ollama": (props: IconProps) => <OllamaIcon {...props} />,
-    openai: (props: IconProps) => <OpenAIIcon {...props} />,
-    ollama: (props: IconProps) => <OllamaIcon {...props} />,
-    "tools.jira": (props: IconProps) => <JiraIcon {...props} />,
+    "tools.google_secops_soar": createIconRenderer(GoogleSecOpsIcon),
+    // AI / LLM namespace
+    "llm.openai": createIconRenderer(OpenAIIcon),
+    "llm.ollama": createIconRenderer(OllamaIcon),
+    "llm.anthropic": createIconRenderer(ClaudeIcon),
+    "ai.slackbot": createIconRenderer(SlackIcon),
   }
+
+/**
+ * Icons for providers.
+ *
+ * @example
+ * <ProviderIcon providerId="microsoft" />
+ * <ProviderIcon providerId="google" />
+ * <ProviderIcon providerId="github" />
+ */
+export const providerIcons: Record<
+  string,
+  (props: CustomIconProps) => JSX.Element
+> = {
+  microsoft_graph: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftIcon {...rest} />
+    </div>
+  ),
+  microsoft_defender: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftDefenderIcon {...rest} />
+    </div>
+  ),
+  microsoft_defender_endpoint: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftDefenderIcon {...rest} />
+    </div>
+  ),
+  microsoft_defender_xdr: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftDefenderIcon {...rest} />
+    </div>
+  ),
+  microsoft_entra: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftEntraIcon {...rest} />
+    </div>
+  ),
+  microsoft_teams: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftTeamsIcon {...rest} />
+    </div>
+  ),
+  microsoft_sentinel: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftSentinelIcon {...rest} />
+    </div>
+  ),
+  azure_log_analytics: ({ className, ...rest }) => (
+    <div className={className}>
+      <AzureLogAnalyticsIcon {...rest} />
+    </div>
+  ),
+  azure_management: ({ className, ...rest }) => (
+    <div className={className}>
+      <AzureManagementIcon {...rest} />
+    </div>
+  ),
+  google: ({ className, ...rest }) => (
+    <div className={className}>
+      <GoogleIcon {...rest} />
+    </div>
+  ),
+  google_docs: ({ className, ...rest }) => (
+    <div className={className}>
+      <GoogleDocsIcon {...rest} />
+    </div>
+  ),
+  google_drive: ({ className, ...rest }) => (
+    <div className={className}>
+      <GoogleDriveIcon {...rest} />
+    </div>
+  ),
+  google_sheets: ({ className, ...rest }) => (
+    <div className={className}>
+      <GoogleSheetsIcon {...rest} />
+    </div>
+  ),
+  google_gmail: ({ className, ...rest }) => (
+    <div className={className}>
+      <GmailIcon {...rest} />
+    </div>
+  ),
+  github: ({ className, ...rest }) => (
+    <div className={className}>
+      <GitHubIcon {...rest} />
+    </div>
+  ),
+  servicenow: ({ className, ...rest }) => (
+    <div className={className}>
+      <ServiceNowIcon {...rest} />
+    </div>
+  ),
+  slack: ({ className, iconClassName, flairsize: _ignored, ...rest }) => (
+    <div className={cn("!rounded-sm", className)}>
+      <SlackIcon {...rest} className={cn("size-full", iconClassName)} />
+    </div>
+  ),
+  custom: ({ className, ...rest }) => (
+    <div className={className}>
+      <Plug2 {...rest} fill="black" />
+    </div>
+  ),
+  sentry_mcp: (props) => <SentryIcon {...props} />,
+  notion_mcp: (props) => <NotionIcon {...props} />,
+  linear_mcp: (props) => <LinearIcon {...props} />,
+  runreveal_mcp: (props) => <RunRevealIcon {...props} />,
+  secureannex_mcp: (props) => <SecureAnnexIcon {...props} />,
+  github_mcp: ({ className, ...rest }) => (
+    <div className={className}>
+      <GitHubIcon {...rest} />
+    </div>
+  ),
+}
+
+export function ProviderIcon({
+  providerId,
+  className,
+  ...rest
+}: {
+  providerId: string
+  className?: string
+}) {
+  const Icon = providerIcons[providerId] ?? providerIcons["custom"]
+  return (
+    <Icon
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-sm bg-stone-200/50 p-1",
+        className
+      )}
+      {...rest}
+    />
+  )
+}
+
+/**
+ * Icons for secrets (credential types).
+ * Maps secret names to their respective icons.
+ */
+export const secretIcons: Record<
+  string,
+  (props: CustomIconProps) => JSX.Element
+> = {
+  gmail: ({ className, ...rest }) => (
+    <div className={className}>
+      <GmailIcon {...rest} />
+    </div>
+  ),
+  slack: ({ className, iconClassName, flairsize: _ignored, ...rest }) => (
+    <div className={cn("!rounded-sm", className)}>
+      <SlackIcon {...rest} className={cn("size-full", iconClassName)} />
+    </div>
+  ),
+  servicenow: ({ className, ...rest }) => (
+    <div className={className}>
+      <ServiceNowIcon {...rest} />
+    </div>
+  ),
+  github: ({ className, ...rest }) => (
+    <div className={className}>
+      <GitHubIcon {...rest} />
+    </div>
+  ),
+  openai: ({ className, ...rest }) => (
+    <div className={className}>
+      <OpenAIIcon {...rest} />
+    </div>
+  ),
+  jira: ({ className, ...rest }) => (
+    <div className={className}>
+      <JiraIcon {...rest} />
+    </div>
+  ),
+  datadog: ({ className, ...rest }) => (
+    <div className={className}>
+      <DatadogIcon {...rest} />
+    </div>
+  ),
+  sentry: ({ className, ...rest }) => (
+    <div className={className}>
+      <SentryIcon {...rest} />
+    </div>
+  ),
+  sql: ({ className, ...rest }) => (
+    <div className={className}>
+      <DatabaseIcon {...rest} />
+    </div>
+  ),
+  smtp: ({ className, ...rest }) => (
+    <div className={className}>
+      <SendIcon {...rest} />
+    </div>
+  ),
+  notion: ({ className, ...rest }) => (
+    <div className={className}>
+      <NotionIcon {...rest} />
+    </div>
+  ),
+  linear: ({ className, ...rest }) => (
+    <div className={className}>
+      <LinearIcon {...rest} />
+    </div>
+  ),
+  google: ({ className, ...rest }) => (
+    <div className={className}>
+      <GoogleIcon {...rest} />
+    </div>
+  ),
+  microsoft: ({ className, ...rest }) => (
+    <div className={className}>
+      <MicrosoftIcon {...rest} />
+    </div>
+  ),
+  anthropic: ({ className, ...rest }) => (
+    <div className={className}>
+      <ClaudeIcon {...rest} />
+    </div>
+  ),
+  gemini: ({ className, ...rest }) => (
+    <div className={className}>
+      <GoogleIcon {...rest} />
+    </div>
+  ),
+  "custom-model-provider": ({ className, ...rest }) => (
+    <div className={className}>
+      <Sparkles {...rest} />
+    </div>
+  ),
+  terraform: ({ className, ...rest }) => (
+    <div className={className}>
+      <TerraformIcon {...rest} />
+    </div>
+  ),
+  pagerduty: ({ className, ...rest }) => (
+    <div className={className}>
+      <PagerDutyIcon {...rest} />
+    </div>
+  ),
+  exa: ({ className, ...rest }) => (
+    <div className={className}>
+      <ExaIcon {...rest} />
+    </div>
+  ),
+  alertmedia: ({ className, ...rest }) => (
+    <div className={className}>
+      <AlertMediaIcon {...rest} />
+    </div>
+  ),
+  gophish: ({ className, ...rest }) => (
+    <div className={className}>
+      <GophishIcon {...rest} />
+    </div>
+  ),
+  // Default fallback using KeyRound icon
+  default: ({ className, ...rest }) => (
+    <div className={className}>
+      <KeyRound {...rest} />
+    </div>
+  ),
+}
+
+export function SecretIcon({
+  secretName,
+  className,
+  ...rest
+}: {
+  secretName: string
+  className?: string
+}) {
+  const Icon = secretIcons[secretName] ?? secretIcons["default"]
+  return (
+    <Icon
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-sm bg-stone-200/50 p-1",
+        className
+      )}
+      {...rest}
+    />
+  )
+}
 
 export function GenericWorkflowIcon({ className, ...rest }: IconProps) {
   return (
@@ -456,22 +706,39 @@ export function GenericWorkflowIcon({ className, ...rest }: IconProps) {
   )
 }
 
+export function ClaudeIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="256"
+      height="257"
+      preserveAspectRatio="xMidYMid"
+      viewBox="0 0 256 257"
+      className={className}
+      {...rest}
+    >
+      <path
+        fill="#D97757"
+        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
+      />
+    </svg>
+  )
+}
+
 export function OpenAIIcon({ className, ...rest }: IconProps) {
   return (
-    <div className={cn(basicIconsCommon, className)}>
-      <svg
-        fill="#000000"
-        width="100%"
-        height="100%"
-        viewBox="0 0 24 24"
-        role="img"
-        xmlns="http://www.w3.org/2000/svg"
-        className="rounded-full"
-        {...rest}
-      >
-        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
-      </svg>
-    </div>
+    <svg
+      fill="#000000"
+      width="100%"
+      height="100%"
+      viewBox="0 0 24 24"
+      role="img"
+      xmlns="http://www.w3.org/2000/svg"
+      className={cn("rounded-full", className)}
+      {...rest}
+    >
+      <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
+    </svg>
   )
 }
 
@@ -481,7 +748,7 @@ export function SlackIcon({ className, ...rest }: IconProps) {
       enableBackground="new 0 0 2447.6 2452.5"
       viewBox="0 0 2447.6 2452.5"
       xmlns="http://www.w3.org/2000/svg"
-      className={cn(basicIconsCommon, className)}
+      className={className}
       {...rest}
     >
       <g clipRule="evenodd" fillRule="evenodd">
@@ -506,6 +773,24 @@ export function SlackIcon({ className, ...rest }: IconProps) {
   )
 }
 
+export function ServiceNowIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="94 4.5 17 17"
+      className={className}
+      {...rest}
+    >
+      <g clipRule="evenodd" fillRule="evenodd">
+        <path
+          d="m102.8 5.762c-4.2 0-7.5 3.3-7.5 7.5 0 2.2 0.9 4.2 2.3 5.6 0.5 0.5 1.4 0.5 2 0.1 0.8-0.7 2-1.1 3.2-1.1 1.3 0 2.3 0.4 3.2 1.1 0.6 0.5 1.4 0.4 2-0.2 1.4-1.4 2.3-3.3 2.3-5.5-0.1-4.1-3.4-7.5-7.5-7.5m-0.1 11.4c-2.3 0-3.8-1.7-3.8-3.8s1.5-3.8 3.8-3.8 3.8 1.7 3.8 3.8-1.5 3.8-3.8 3.8"
+          fill="#81b5a1"
+        />
+      </g>
+    </svg>
+  )
+}
+
 export function DatadogIcon({ className, ...rest }: IconProps) {
   return (
     <svg
@@ -519,11 +804,7 @@ export function DatadogIcon({ className, ...rest }: IconProps) {
         clipRule: "evenodd",
         fill: "#632ca6",
       }}
-      className={cn(
-        "rounded-full bg-purple-400/20",
-        basicIconsCommon,
-        className
-      )}
+      className={cn("rounded-full bg-purple-400/20", className)}
       {...rest}
     >
       <path d="m670.38 608.27-71.24-46.99-59.43 99.27-69.12-20.21-60.86 92.89 3.12 29.24 330.9-60.97-19.22-206.75-54.15 113.52zm-308.59-89.14 53.09-7.3c8.59 3.86 14.57 5.33 24.87 7.95 16.04 4.18 34.61 8.19 62.11-5.67 6.4-3.17 19.73-15.36 25.12-22.31l217.52-39.46 22.19 268.56-372.65 67.16-32.25-268.93zm404.06-96.77-21.47 4.09L703.13.27.27 81.77l86.59 702.68 82.27-11.94c-6.57-9.38-16.8-20.73-34.27-35.26-24.23-20.13-15.66-54.32-1.37-75.91 18.91-36.48 116.34-82.84 110.82-141.15-1.98-21.2-5.35-48.8-25.03-67.71-.74 7.85.59 15.41.59 15.41s-8.08-10.31-12.11-24.37c-4-5.39-7.14-7.11-11.39-14.31-3.03 8.33-2.63 17.99-2.63 17.99s-6.61-15.62-7.68-28.8c-3.92 5.9-4.91 17.11-4.91 17.11s-8.59-24.62-6.63-37.88c-3.92-11.54-15.54-34.44-12.25-86.49 21.45 15.03 68.67 11.46 87.07-15.66 6.11-8.98 10.29-33.5-3.05-81.81-8.57-30.98-29.79-77.11-38.06-94.61l-.99.71c4.36 14.1 13.35 43.66 16.8 57.99 10.44 43.47 13.24 58.6 8.34 78.64-4.17 17.42-14.17 28.82-39.52 41.56-25.35 12.78-58.99-18.32-61.12-20.04-24.63-19.62-43.68-51.63-45.81-67.18-2.21-17.02 9.81-27.24 15.87-41.16-8.67 2.48-18.34 6.88-18.34 6.88s11.54-11.94 25.77-22.27c5.89-3.9 9.35-6.38 15.56-11.54-8.99-.15-16.29.11-16.29.11s14.99-8.1 30.53-14c-11.37-.5-22.25-.08-22.25-.08s33.45-14.96 59.87-25.94c18.17-7.45 35.92-5.25 45.89 9.17 13.09 18.89 26.84 29.15 55.98 35.51 17.89-7.93 23.33-12.01 45.81-18.13 19.79-21.76 35.33-24.58 35.33-24.58s-7.71 7.07-9.77 18.18c11.22-8.84 23.52-16.22 23.52-16.22s-4.76 5.88-9.2 15.22l1.03 1.53c13.09-7.85 28.48-14.04 28.48-14.04s-4.4 5.56-9.56 12.76c9.87-.08 29.89.42 37.66 1.3 45.87 1.01 55.39-48.99 72.99-55.26 22.04-7.87 31.89-12.63 69.45 24.26 32.23 31.67 57.41 88.36 44.91 101.06-10.48 10.54-31.16-4.11-54.08-32.68-12.11-15.13-21.27-33.01-25.56-55.74-3.62-19.18-17.71-30.31-17.71-30.31S520 92.95 520 109.01c0 8.77 1.1 41.56 15.16 59.96-1.39 2.69-2.04 13.31-3.58 15.34-16.36-19.77-51.49-33.92-57.22-38.09 19.39 15.89 63.96 52.39 81.08 87.37 16.19 33.08 6.65 63.4 14.84 71.25 2.33 2.25 34.82 42.73 41.07 63.07 10.9 35.45.65 72.7-13.62 95.81l-39.85 6.21c-5.83-1.62-9.76-2.43-14.99-5.46 2.88-5.1 8.61-17.82 8.67-20.44l-2.25-3.95c-12.4 17.57-33.18 34.63-50.44 44.43-22.59 12.8-48.63 10.83-65.58 5.58-48.11-14.84-93.6-47.35-104.57-55.89 0 0-.34 6.82 1.73 8.35 12.13 13.68 39.92 38.43 66.78 55.68l-57.26 6.3 27.07 210.78c-12 1.72-13.87 2.56-27.01 4.43-11.58-40.91-33.73-67.62-57.94-83.18-21.35-13.72-50.8-16.81-78.99-11.23l-1.81 2.1c19.6-2.04 42.74.8 66.51 15.85 23.33 14.75 42.13 52.85 49.05 75.79 8.86 29.32 14.99 60.68-8.86 93.92-16.97 23.63-66.51 36.69-106.53 8.44 10.69 17.19 25.14 31.25 44.59 33.9 28.88 3.92 56.29-1.09 75.16-20.46 16.11-16.56 24.65-51.19 22.4-87.66l25.49-3.7 9.2 65.46 421.98-50.81-34.43-335.8zM509.12 244.59c-1.18 2.69-3.03 4.45-.25 13.2l.17.5.44 1.13 1.16 2.62c5.01 10.24 10.51 19.9 19.7 24.83 2.38-.4 4.84-.67 7.39-.8 8.63-.38 14.08.99 17.54 2.85.31-1.72.38-4.24.19-7.95-.67-12.97 2.57-35.03-22.36-46.64-9.41-4.37-22.61-3.02-27.01 2.43.8.1 1.52.27 2.08.46 6.65 2.33 2.14 4.62.95 7.37m69.87 121.02c-3.27-1.8-18.55-1.09-29.29.19-20.46 2.41-42.55 9.51-47.39 13.29-8.8 6.8-4.8 18.66 1.7 23.53 18.23 13.62 34.21 22.75 51.08 20.53 10.36-1.36 19.49-17.76 25.96-32.64 4.43-10.25 4.43-21.31-2.06-24.9M397.85 260.65c5.77-5.48-28.74-12.68-55.52 5.58-19.75 13.47-20.38 42.35-1.47 58.72 1.89 1.62 3.45 2.77 4.91 3.71 5.52-2.6 11.81-5.23 19.05-7.58 12.23-3.97 22.4-6.02 30.76-7.11 4-4.47 8.65-12.34 7.49-26.59-1.58-19.33-16.23-16.26-5.22-26.73" />
@@ -536,7 +817,7 @@ export function UrlscanIcon({ className, ...rest }: IconProps) {
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 950 950"
-      className={cn(basicIconsCommon, "bg-orange-400/20", className)}
+      className={cn("bg-orange-400/20", className)}
       {...rest}
     >
       <path
@@ -571,6 +852,126 @@ export function UrlscanIcon({ className, ...rest }: IconProps) {
   )
 }
 
+export function EmailrepIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="150"
+      height="100"
+      viewBox="0 0 34 23"
+      fill="none"
+      className={className}
+      {...rest}
+    >
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M0.0997772 11.5L8.34994 19.6435C12.8838 24.1188 20.3157 24.1188 24.8496 19.6435L29.436 15.1163L28.5201 14.2122L27.6043 13.3082L25.7724 11.5L23.0397 8.80266L21.186 6.97293C18.6742 4.49361 14.5253 4.49361 12.0136 6.97293L11.0908 7.88375L12.9227 9.69178L13.8454 8.78111C15.3458 7.29999 17.8537 7.29999 19.3541 8.78111L19.5341 8.95872L21.2078 10.6108L22.1087 11.5L23.9405 13.3082L25.7724 15.1163L23.0179 17.8353C19.4949 21.3126 13.7045 21.3126 10.1816 17.8353L5.59527 13.3082L3.76341 11.5L1.93167 9.69178L0.0997772 11.5ZM7.42719 7.88375L9.25906 9.69178L11.0908 11.5L11.5522 11.9553L13.3839 13.7635L13.8454 14.2189C15.3458 15.7001 17.8537 15.7001 19.3541 14.2189L20.2769 13.3082L22.1087 15.1163L21.186 16.0271C18.6742 18.5064 14.5253 18.5064 12.0136 16.0271L9.72027 13.7635L7.42719 11.5L5.59527 9.69178L4.23987 8.35405L3.76341 7.88375L8.34994 3.35648C12.8838 -1.11883 20.3157 -1.11883 24.8496 3.35648L33.0998 11.5L31.2679 13.3082L29.436 11.5L27.7385 9.82443L23.0179 5.16469C19.4949 1.68739 13.7045 1.68739 10.1816 5.16469L7.42719 7.88375ZM14.7546 11.5L15.6772 12.4108C16.1666 12.8938 17.0329 12.8938 17.5224 12.4108L18.445 11.5L17.5224 10.5892C17.0329 10.1062 16.1666 10.1062 15.6772 10.5892L14.7546 11.5Z"
+        fill="#00C292"
+        fillOpacity="0.8"
+      />
+    </svg>
+  )
+}
+
+export function SublimeIcon(props: IconProps) {
+  return <EmailrepIcon {...props} />
+}
+
+export function VirusTotalIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="100%"
+      height="100%"
+      viewBox="0 0 1024 1024"
+      preserveAspectRatio="xMidYMid meet"
+      className={className}
+      {...rest}
+    >
+      <circle cx="512" cy="512" r="512" style={{ fill: "#394eff" }} />
+      <path
+        d="M256.1 300.7 468 512.2 256.1 723.3h467.8V300.7H256.1zM678.7 678h-316l167.1-165.8L362.7 346h315.9c.1 0 .1 332 .1 332z"
+        style={{ fill: "#fff" }}
+      />
+    </svg>
+  )
+}
+
+export function PagerDutyToolIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      className={className}
+      {...rest}
+    >
+      <path
+        fill="#06AC38"
+        d="M16.965 1.18C15.085.164 13.769 0 10.683 0H3.73v14.55h6.926c2.743 0 4.8-.164 6.61-1.37 1.975-1.303 3.004-3.484 3.004-6.007 0-2.716-1.262-4.896-3.305-5.994zm-5.5 10.326h-4.21V3.113l3.977-.027c3.62-.028 5.43 1.234 5.43 4.128 0 3.113-2.248 4.292-5.197 4.292zM3.73 17.61h3.525V24H3.73Z"
+      />
+    </svg>
+  )
+}
+
+export function GophishToolIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="186.667"
+      height="213.333"
+      viewBox="0 0 174.99999 199.99999"
+      className={className}
+      {...rest}
+    >
+      <g transform="translate(-286.786 -403.79)">
+        <path
+          d="M374.286 403.79l-87.5 50v100l87.5 50 87.5-50v-100l-87.5-50zm-.62 14.633l75.226 43.005v85.981l-75.226 42.99-75.225-42.99v-85.981l75.225-43.005z"
+          fill="#283F50"
+        />
+        <path
+          d="M472.126 134.444l6.911 3.808-6.753 4.081z"
+          transform="matrix(.33514 0 0 .78956 188.901 398.936)"
+          fill="#283F50"
+          stroke="#283F50"
+          strokeWidth="4"
+          strokeLinecap="square"
+        />
+        <path
+          d="M348.42 508.015v17.441-17.441z"
+          fill="none"
+          stroke="#283F50"
+          strokeWidth="4"
+        />
+        <circle
+          r="6.294"
+          cy="456.744"
+          cx="390.358"
+          fill="none"
+          stroke="#283F50"
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M390.388 527.03a20.98 20.98 0 0 1-10.49 18.17 20.98 20.98 0 0 1-20.981 0 20.98 20.98 0 0 1-10.49-18.17"
+          fill="none"
+          stroke="#283F50"
+          strokeWidth="4"
+          strokeLinecap="square"
+        />
+        <g stroke="#283F50">
+          <path d="M390.45 463.343v61.879-61.88z" fill="none" strokeWidth="4" />
+          <path
+            d="M346.635 503.574l9.522 12.33-5.745-2.01-3.777-10.32z"
+            fill="#283F50"
+          />
+        </g>
+      </g>
+    </svg>
+  )
+}
+
 export function JiraIcon({ className, ...rest }: IconProps) {
   return (
     <svg
@@ -579,7 +980,7 @@ export function JiraIcon({ className, ...rest }: IconProps) {
       viewBox="0 0 32 32"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={cn("rounded-full bg-blue-400/20", basicIconsCommon, className)}
+      className={className}
       {...rest}
     >
       <path
@@ -634,7 +1035,7 @@ export function OllamaIcon({ className, ...rest }: IconProps) {
       viewBox="0 0 646 854"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={cn("rounded-full bg-sky-400/20", basicIconsCommon, className)}
+      className={cn("rounded-full bg-sky-400/20", className)}
       {...rest}
     >
       <path
@@ -657,6 +1058,811 @@ export function OllamaIcon({ className, ...rest }: IconProps) {
         d="M478.153 364.982C469.755 367.25 462.276 373.502 458.291 381.717L455.717 386.989L455.778 394.345C455.778 401.211 455.901 402.069 457.862 406.911C460.56 413.777 463.257 418.007 468.222 422.85C476.743 431.309 486.367 433.516 499.241 430.145C506.658 428.183 514.075 421.93 517.631 414.635C520.696 408.444 521.431 403.969 520.451 396.919C518.183 380.797 508.742 369.089 494.704 364.982C490.597 363.756 482.628 363.756 478.153 364.982Z"
         fill="black"
       />
+    </svg>
+  )
+}
+
+export function GoogleSheetsIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 47.333 65.083"
+      width="100%"
+      height="100%"
+      className={className}
+      {...rest}
+    >
+      <defs>
+        <linearGradient
+          id="sheets-gradient"
+          x1="50.0053945%"
+          y1="8.58610612%"
+          x2="50.0053945%"
+          y2="100.013939%"
+        >
+          <stop stopColor="#263238" stopOpacity="0.2" offset="0%" />
+          <stop stopColor="#263238" stopOpacity="0.02" offset="100%" />
+        </linearGradient>
+        <radialGradient
+          id="sheets-radial"
+          cx="3.16804688%"
+          cy="2.71744318%"
+          fx="3.16804688%"
+          fy="2.71744318%"
+          r="161.248516%"
+          gradientTransform="translate(0.031680,0.027174),scale(1.000000,0.727273),translate(-0.031680,-0.027174)"
+        >
+          <stop stopColor="#FFFFFF" stopOpacity="0.1" offset="0%" />
+          <stop stopColor="#FFFFFF" stopOpacity="0" offset="100%" />
+        </radialGradient>
+      </defs>
+      <path
+        d="M29.583 0L4.438 0C1.997 0 0 1.997 0 4.438v56.208c0 2.441 1.997 4.438 4.438 4.438h38.458c2.441 0 4.438-1.997 4.438-4.438V17.75L29.583 0z"
+        fill="#0F9D58"
+      />
+      <path
+        d="M11.833 31.802v21.448h23.667V31.802H11.833zm10.354 18.49h-7.396v-3.698h7.396v3.698zm0-5.917h-7.396v-3.698h7.396v3.698zm0-5.917h-7.396v-3.698h7.396v3.698zm10.354 18.49h-7.396v-3.698h7.396v3.698zm0-5.917h-7.396v-3.698h7.396v3.698zm0-5.917h-7.396v-3.698h7.396v3.698z"
+        fill="#F1F1F1"
+      />
+      <polygon
+        points="30.881 16.452 47.333 32.9 47.333 17.75"
+        fill="url(#sheets-gradient)"
+      />
+      <path d="M29.583 0L36.979 10.354 47.333 17.75 29.583 0z" fill="#87CEAC" />
+      <path
+        d="M29.583 0L4.438 0C1.997 0 0 1.997 0 4.438v56.208c0 2.441 1.997 4.438 4.438 4.438h38.458c2.441 0 4.438-1.997 4.438-4.438V17.75L29.583 0z"
+        fill="url(#sheets-radial)"
+      />
+    </svg>
+  )
+}
+
+export function GoogleDocsIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 47 65"
+      width="100%"
+      height="100%"
+      className={className}
+      {...rest}
+    >
+      <defs>
+        <linearGradient
+          id="docs-gradient"
+          x1="50.0053945%"
+          y1="8.58610612%"
+          x2="50.0053945%"
+          y2="100.013939%"
+        >
+          <stop stopColor="#1A237E" stopOpacity="0.2" offset="0%" />
+          <stop stopColor="#1A237E" stopOpacity="0.02" offset="100%" />
+        </linearGradient>
+        <radialGradient
+          id="docs-radial"
+          cx="3.16804688%"
+          cy="2.71744318%"
+          fx="3.16804688%"
+          fy="2.71744318%"
+          r="161.248516%"
+          gradientTransform="translate(0.031680,0.027174),scale(1.000000,0.723077),translate(-0.031680,-0.027174)"
+        >
+          <stop stopColor="#FFFFFF" stopOpacity="0.1" offset="0%" />
+          <stop stopColor="#FFFFFF" stopOpacity="0" offset="100%" />
+        </radialGradient>
+      </defs>
+      <path
+        d="M29.375 0L4.406 0C1.983 0 0 1.994 0 4.432v56.136c0 2.438 1.983 4.432 4.406 4.432h38.188c2.423 0 4.406-1.994 4.406-4.432V17.727L29.375 0z"
+        fill="#4285F4"
+      />
+      <polygon
+        points="30.664 16.431 47 32.858 47 17.727"
+        fill="url(#docs-gradient)"
+      />
+      <path
+        d="M11.75 47.273h23.5v-2.955H11.75v2.955zm0 5.909h17.625v-2.955H11.75v2.955zm0-20.682v2.955h23.5V32.5H11.75zm0 8.864h23.5v-2.955H11.75v2.955z"
+        fill="#F1F1F1"
+      />
+      <path d="M29.375 0L36.719 10.341 47 17.727 29.375 0z" fill="#A1C2FA" />
+      <path
+        d="M29.375 0L4.406 0C1.983 0 0 1.994 0 4.432v56.136c0 2.438 1.983 4.432 4.406 4.432h38.188c2.423 0 4.406-1.994 4.406-4.432V17.727L29.375 0z"
+        fill="url(#docs-radial)"
+      />
+    </svg>
+  )
+}
+
+export function GoogleDriveIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 87.3 78" {...props}>
+      <path
+        fill="#0066da"
+        d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z"
+      />
+      <path
+        fill="#00ac47"
+        d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0-1.2 4.5h27.5z"
+      />
+      <path
+        fill="#ea4335"
+        d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z"
+      />
+      <path
+        fill="#00832d"
+        d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z"
+      />
+      <path
+        fill="#2684fc"
+        d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z"
+      />
+      <path
+        fill="#ffba00"
+        d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z"
+      />
+    </svg>
+  )
+}
+
+export function GmailIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" {...props}>
+      <path
+        fill="#4caf50"
+        d="M45,16.2l-5,2.75l-5,4.75L35,40h7c1.657,0,3-1.343,3-3V16.2z"
+      />
+      <path
+        fill="#1e88e5"
+        d="M3,16.2l3.614,1.71L13,23.7V40H6c-1.657,0-3-1.343-3-3V16.2z"
+      />
+      <polygon
+        fill="#e53935"
+        points="35,11.2 24,19.45 13,11.2 12,17 13,23.7 24,31.95 35,23.7 36,17"
+      />
+      <path
+        fill="#c62828"
+        d="M3,12.298V16.2l10,7.5V11.2L9.876,8.859C9.132,8.301,8.228,8,7.298,8h0C4.924,8,3,9.924,3,12.298z"
+      />
+      <path
+        fill="#fbc02d"
+        d="M45,12.298V16.2l-10,7.5V11.2l3.124-2.341C38.868,8.301,39.772,8,40.702,8h0 C43.076,8,45,9.924,45,12.298z"
+      />
+    </svg>
+  )
+}
+
+export function MicrosoftIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 256 256"
+      xmlns="http://www.w3.org/2000/svg"
+      width="256"
+      height="256"
+      preserveAspectRatio="xMidYMid"
+      {...rest}
+    >
+      <path fill="#F1511B" d="M121.666 121.666H0V0h121.666z" />
+      <path fill="#80CC28" d="M256 121.666H134.335V0H256z" />
+      <path fill="#00ADEF" d="M121.663 256.002H0V134.336h121.663z" />
+      <path fill="#FBBC09" d="M256 256.002H134.335V134.336H256z" />
+    </svg>
+  )
+}
+
+export function GitHubIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg viewBox="0 0 438.549 438.549" className={className} {...rest}>
+      <path
+        fill="currentColor"
+        d="M409.132 114.573c-19.608-33.596-46.205-60.194-79.798-79.8-33.598-19.607-70.277-29.408-110.063-29.408-39.781 0-76.472 9.804-110.063 29.408-33.596 19.605-60.192 46.204-79.8 79.8C9.803 148.168 0 184.854 0 224.63c0 47.78 13.94 90.745 41.827 128.906 27.884 38.164 63.906 64.572 108.063 79.227 5.14.954 8.945.283 11.419-1.996 2.475-2.282 3.711-5.14 3.711-8.562 0-.571-.049-5.708-.144-15.417a2549.81 2549.81 0 01-.144-25.406l-6.567 1.136c-4.187.767-9.469 1.092-15.846 1-6.374-.089-12.991-.757-19.842-1.999-6.854-1.231-13.229-4.086-19.13-8.559-5.898-4.473-10.085-10.328-12.56-17.556l-2.855-6.57c-1.903-4.374-4.899-9.233-8.992-14.559-4.093-5.331-8.232-8.945-12.419-10.848l-1.999-1.431c-1.332-.951-2.568-2.098-3.711-3.429-1.142-1.331-1.997-2.663-2.568-3.997-.572-1.335-.098-2.43 1.427-3.289 1.525-.859 4.281-1.276 8.28-1.276l5.708.853c3.807.763 8.516 3.042 14.133 6.851 5.614 3.806 10.229 8.754 13.846 14.842 4.38 7.806 9.657 13.754 15.846 17.847 6.184 4.093 12.419 6.136 18.699 6.136 6.28 0 11.704-.476 16.274-1.423 4.565-.952 8.848-2.383 12.847-4.285 1.713-12.758 6.377-22.559 13.988-29.41-10.848-1.14-20.601-2.857-29.264-5.14-8.658-2.286-17.605-5.996-26.835-11.14-9.235-5.137-16.896-11.516-22.985-19.126-6.09-7.614-11.088-17.61-14.987-29.979-3.901-12.374-5.852-26.648-5.852-42.826 0-23.035 7.52-42.637 22.557-58.817-7.044-17.318-6.379-36.732 1.997-58.24 5.52-1.715 13.706-.428 24.554 3.853 10.85 4.283 18.794 7.952 23.84 10.994 5.046 3.041 9.089 5.618 12.135 7.708 17.705-4.947 35.976-7.421 54.818-7.421s37.117 2.474 54.823 7.421l10.849-6.849c7.419-4.57 16.18-8.758 26.262-12.565 10.088-3.805 17.802-4.853 23.134-3.138 8.562 21.509 9.325 40.922 2.279 58.24 15.036 16.18 22.559 35.787 22.559 58.817 0 16.178-1.958 30.497-5.853 42.966-3.9 12.471-8.941 22.457-15.125 29.979-6.191 7.521-13.901 13.85-23.131 18.986-9.232 5.14-18.182 8.85-26.84 11.136-8.662 2.286-18.415 4.004-29.263 5.146 9.894 8.562 14.842 22.077 14.842 40.539v60.237c0 3.422 1.19 6.279 3.572 8.562 2.379 2.279 6.136 2.95 11.276 1.995 44.163-14.653 80.185-41.062 108.068-79.226 27.88-38.161 41.825-81.126 41.825-128.906-.01-39.771-9.818-76.454-29.414-110.049z"
+      ></path>
+    </svg>
+  )
+}
+
+export function GoogleIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+        fill="#34A853"
+      />
+      <path
+        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+        fill="#FBBC05"
+      />
+      <path
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+        fill="#EA4335"
+      />
+      <path d="M1 1h22v22H1z" fill="none" />
+    </svg>
+  )
+}
+
+export function MicrosoftDefenderIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="48"
+      height="48"
+      viewBox="0 0 48 48"
+      className={className}
+      {...rest}
+    >
+      <path fill="#0370c8" d="M24 44a1 1 0 0 1 0-2v2z" />
+      <path fill="#0f5094" d="M25 43a1 1 0 0 1-1 1v-2a1 1 0 0 1 1 1z" />
+      <circle cx="42" cy="11" r="1" fill="#0883d9" />
+      <circle cx="6" cy="11" r="1" fill="#33bff0" />
+      <path fill="#0f5094" d="m24 43 .427.907s15.144-7.9 18.08-19.907H24v19z" />
+      <path
+        fill="#0883d9"
+        d="m43 11-1-1c-11.122 0-11.278-6-18-6v20h18.507c.315-1.288.493-2.622.493-4v-9z"
+      />
+      <path fill="#0370c8" d="m24 43-.427.907S8.429 36.007 5.493 24H24v19z" />
+      <path
+        fill="#33bff0"
+        d="m5 11 1-1c11.122 0 11.278-6 18-6v20H5.493A16.789 16.789 0 0 1 5 20v-9z"
+      />
+    </svg>
+  )
+}
+export function MicrosoftEntraIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="18"
+      height="18"
+      data-name="Layer 1"
+      className={className}
+      {...rest}
+    >
+      <path
+        fill="#225086"
+        d="M3.802 14.032c.388.242 1.033.511 1.715.511.621 0 1.198-.18 1.676-.487l.002-.001L9 12.927V17a1.56 1.56 0 0 1-.824-.234l-4.374-2.734Z"
+      />
+      <path
+        fill="#6df"
+        d="m7.853 1.507-7.5 8.46c-.579.654-.428 1.642.323 2.111l3.126 1.954c.388.242 1.033.511 1.715.511.621 0 1.198-.18 1.676-.487l.002-.001L9 12.927l-4.364-2.728 4.365-4.924V1c-.424 0-.847.169-1.147.507Z"
+      />
+      <path
+        fill="#cbf8ff"
+        d="m4.636 10.199.052.032L9 12.927h.001V5.276L9 5.275l-4.364 4.924z"
+      />
+      <path
+        fill="#074793"
+        d="M17.324 12.078c.751-.469.902-1.457.323-2.111l-4.921-5.551a3.102 3.102 0 0 0-1.313-.291c-.925 0-1.752.399-2.302 1.026l-.109.123 4.364 4.924-4.365 2.728v4.073c.287 0 .573-.078.823-.234l7.5-4.688Z"
+      />
+      <path
+        fill="#0294e4"
+        d="M9.001 1v4.275l.109-.123a3.053 3.053 0 0 1 2.302-1.026c.472 0 .916.107 1.313.291l-2.579-2.909A1.524 1.524 0 0 0 9 1.001Z"
+      />
+      <path fill="#96bcc2" d="M13.365 10.199 9.001 5.276v7.65l4.364-2.727z" />
+    </svg>
+  )
+}
+
+export function MicrosoftTeamsIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 2228.8 2073.3"
+      className={className}
+      {...rest}
+    >
+      <path
+        fill="#5059C9"
+        d="M1555 778h575c55 0 99 44 99 98v524c0 200-162 362-362 362h-2a362 362 0 0 1-362-362V829c0-28 23-51 52-51z"
+      />
+      <circle cx="1943.8" cy="440.6" r="233.3" fill="#5059C9" />
+      <circle cx="1218.1" cy="336.9" r="336.9" fill="#7B83EB" />
+      <path
+        fill="#7B83EB"
+        d="M1667 778H717c-54 1-96 45-95 99v598a585 585 0 0 0 570 598c323-8 578-275 570-598V877c2-54-41-98-95-99z"
+      />
+      <path
+        d="M1244 778v838a95 95 0 0 1-95 95H668a614 614 0 0 1-46-236V877c-1-54 41-98 95-100h527z"
+        opacity=".1"
+      />
+      <path
+        d="M1192 778v889a95 95 0 0 1-95 95H692a672 672 0 0 1-43-103c-18-60-27-122-27-184V877c-1-54 41-98 95-100h475z"
+        opacity=".2"
+      />
+      <path
+        d="M1192 778v786c0 52-42 94-95 95H649c-18-60-27-122-27-184V877c-1-54 41-98 95-100h475z"
+        opacity=".2"
+      />
+      <path
+        d="M1140 778v786c0 52-42 94-95 95H649c-18-60-27-122-27-184V877c-1-54 41-98 95-100h423z"
+        opacity=".2"
+      />
+      <path
+        d="M1244 510v163l-26 1-26-1a337 337 0 0 1-302-258h259c52 0 95 42 95 95z"
+        opacity=".1"
+      />
+      <path
+        d="M1192 561v112a337 337 0 0 1-285-206h190c53 0 95 42 95 94z"
+        opacity=".2"
+      />
+      <path
+        d="M1192 561v112a337 337 0 0 1-285-206h190c53 0 95 42 95 94z"
+        opacity=".2"
+      />
+      <path
+        d="M1140 561v104a337 337 0 0 1-233-198h138c53 0 95 42 95 94z"
+        opacity=".2"
+      />
+      <linearGradient
+        id="a"
+        x1="198.1"
+        x2="942.2"
+        y1="1683.1"
+        y2="394.3"
+        gradientTransform="matrix(1 0 0 -1 0 2075)"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop offset="0" stopColor="#5a62c3" />
+        <stop offset=".5" stopColor="#4d55bd" />
+        <stop offset="1" stopColor="#3940ab" />
+      </linearGradient>
+      <path
+        fill="url(#a)"
+        d="M95 467h950c53 0 95 42 95 95v950c0 52-42 95-95 95H95c-52 0-95-43-95-95V562c0-53 43-95 95-95z"
+      />
+      <path fill="#FFF" d="M820 828H630v517H509V828H320V728h500v100z" />
+    </svg>
+  )
+}
+
+export function MicrosoftSentinelIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 18 18"
+      className={className}
+      {...rest}
+    >
+      <defs>
+        <linearGradient
+          id="a"
+          x1="9"
+          x2="9"
+          y1="16.2"
+          y2=".6"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="#1b93eb" />
+          <stop offset=".2" stopColor="#2095eb" />
+          <stop offset=".4" stopColor="#2e9ced" />
+          <stop offset=".7" stopColor="#45a7ef" />
+          <stop offset=".9" stopColor="#64b6f1" />
+          <stop offset="1" stopColor="#6bb9f2" />
+        </linearGradient>
+      </defs>
+      <path fill="#1b93eb" d="M16 8c0 5-6 9-7 9s-7-4-7-9V2l7-1 7 2Z" />
+      <path
+        fill="url(#a)"
+        d="M15 8c0 5-5 8-6 9-1-1-6-4-6-9V3c4 0 3-2 6-2s2 2 6 2Z"
+      />
+      <path
+        fill="#c3f1ff"
+        d="M9 7a3 3 0 0 1 3 2h2A5 5 0 0 0 4 9h2a3 3 0 0 1 3-2Z"
+      />
+      <circle cx="9" cy="9.4" r="1.9" fill="#fff" />
+    </svg>
+  )
+}
+
+export function AzureLogAnalyticsIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      className={className}
+      {...rest}
+    >
+      <defs>
+        <linearGradient
+          id="azure-log-gradient"
+          x1="12"
+          x2="12"
+          y1="6"
+          y2="20"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="#50e6ff" />
+          <stop offset="1" stopColor="#0078d4" />
+        </linearGradient>
+      </defs>
+      <rect
+        x="5"
+        y="15"
+        width="2.5"
+        height="5"
+        rx="0.5"
+        fill="url(#azure-log-gradient)"
+      />
+      <rect
+        x="9"
+        y="12"
+        width="2.5"
+        height="8"
+        rx="0.5"
+        fill="url(#azure-log-gradient)"
+      />
+      <rect
+        x="13"
+        y="8"
+        width="2.5"
+        height="12"
+        rx="0.5"
+        fill="url(#azure-log-gradient)"
+      />
+      <rect
+        x="17"
+        y="11"
+        width="2.5"
+        height="9"
+        rx="0.5"
+        fill="url(#azure-log-gradient)"
+      />
+    </svg>
+  )
+}
+
+export function AzureManagementIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 18 18"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M5.33492 1.37491C5.44717 1.04229 5.75909 0.818359 6.11014 0.818359H11.25L5.91513 16.6255C5.80287 16.9581 5.49095 17.182 5.13991 17.182H1.13968C0.579936 17.182 0.185466 16.6325 0.364461 16.1022L5.33492 1.37491Z"
+        fill="url(#azure-mgmt-0)"
+      />
+      <path
+        d="M13.5517 11.4546H5.45126C5.1109 11.4546 4.94657 11.8715 5.19539 12.1037L10.4005 16.9618C10.552 17.1032 10.7515 17.1819 10.9587 17.1819H15.5453L13.5517 11.4546Z"
+        fill="#0078D4"
+      />
+      <path
+        d="M6.11014 0.818359C5.75909 0.818359 5.44717 1.04229 5.33492 1.37491L0.364461 16.1022C0.185466 16.6325 0.579936 17.182 1.13968 17.182H5.13991C5.49095 17.182 5.80287 16.9581 5.91513 16.6255L6.90327 13.6976L10.4005 16.9617C10.552 17.1032 10.7515 17.1818 10.9588 17.1818H15.5454L13.5517 11.4545H7.66032L11.25 0.818359H6.11014Z"
+        fill="url(#azure-mgmt-1)"
+      />
+      <path
+        d="M12.665 1.37478C12.5528 1.04217 12.2409 0.818237 11.8898 0.818237H6.13629H6.16254C6.51358 0.818237 6.82551 1.04217 6.93776 1.37478L11.9082 16.1021C12.0872 16.6324 11.6927 17.1819 11.133 17.1819H11.0454H16.8603C17.42 17.1819 17.8145 16.6324 17.6355 16.1021L12.665 1.37478Z"
+        fill="url(#azure-mgmt-2)"
+      />
+      <defs>
+        <linearGradient
+          id="azure-mgmt-0"
+          x1="6.07512"
+          y1="1.38476"
+          x2="0.738178"
+          y2="17.1514"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop stopColor="#114A8B" />
+          <stop offset="1" stopColor="#0669BC" />
+        </linearGradient>
+        <linearGradient
+          id="azure-mgmt-1"
+          x1="10.3402"
+          y1="11.4564"
+          x2="9.107"
+          y2="11.8734"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop stopOpacity="0.3" />
+          <stop offset="0.0711768" stopOpacity="0.2" />
+          <stop offset="0.321031" stopOpacity="0.1" />
+          <stop offset="0.623053" stopOpacity="0.05" />
+          <stop offset="1" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient
+          id="azure-mgmt-2"
+          x1="9.45858"
+          y1="1.38467"
+          x2="15.3168"
+          y2="16.9926"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop stopColor="#3CCBF4" />
+          <stop offset="1" stopColor="#2892DF" />
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+}
+
+export function SentryIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 50 44"
+      width="100%"
+      height="100%"
+      className={cn("origin-center scale-105", className)}
+      {...rest}
+    >
+      <path
+        d="M29,2.26a4.67,4.67,0,0,0-8,0L14.42,13.53A32.21,32.21,0,0,1,32.17,40.19H27.55A27.68,27.68,0,0,0,12.09,17.47L6,28a15.92,15.92,0,0,1,9.23,12.17H4.62A.76.76,0,0,1,4,39.06l2.94-5a10.74,10.74,0,0,0-3.36-1.9l-2.91,5a4.54,4.54,0,0,0,1.69,6.24A4.66,4.66,0,0,0,4.62,44H19.15a19.4,19.4,0,0,0-8-17.31l2.31-4A23.87,23.87,0,0,1,23.76,44H36.07a35.88,35.88,0,0,0-16.41-31.8l4.67-8a.77.77,0,0,1,1.05-.27c.53.29,20.29,34.77,20.66,35.17a.76.76,0,0,1-.68,1.13H40.6q.09,1.91,0,3.81h4.78A4.59,4.59,0,0,0,50,39.43a4.49,4.49,0,0,0-.62-2.28Z"
+        fill="#362d59"
+      />
+    </svg>
+  )
+}
+
+export function NotionIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="100%"
+      height="100%"
+      viewBox="0 0 100 100"
+      fill="none"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M6.017 4.313l55.333 -4.087c6.797 -0.583 8.543 -0.19 12.817 2.917l17.663 12.443c2.913 2.14 3.883 2.723 3.883 5.053v68.243c0 4.277 -1.553 6.807 -6.99 7.193L24.467 99.967c-4.08 0.193 -6.023 -0.39 -8.16 -3.113L3.3 79.94c-2.333 -3.113 -3.3 -5.443 -3.3 -8.167V11.113c0 -3.497 1.553 -6.413 6.017 -6.8z"
+        fill="#fff"
+      />
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M61.35 0.227l-55.333 4.087C1.553 4.7 0 7.617 0 11.113v60.66c0 2.723 0.967 5.053 3.3 8.167l13.007 16.913c2.137 2.723 4.08 3.307 8.16 3.113l64.257 -3.89c5.433 -0.387 6.99 -2.917 6.99 -7.193V20.64c0 -2.21 -0.873 -2.847 -3.443 -4.733L74.167 3.143c-4.273 -3.107 -6.02 -3.5 -12.817 -2.917zM25.92 19.523c-5.247 0.353 -6.437 0.433 -9.417 -1.99L8.927 11.507c-0.77 -0.78 -0.383 -1.753 1.557 -1.947l53.193 -3.887c4.467 -0.39 6.793 1.167 8.54 2.527l9.123 6.61c0.39 0.197 1.36 1.36 0.193 1.36l-54.933 3.307 -0.68 0.047zM19.803 88.3V30.367c0 -2.53 0.777 -3.697 3.103 -3.893L86 22.78c2.14 -0.193 3.107 1.167 3.107 3.693v57.547c0 2.53 -0.39 4.67 -3.883 4.863l-60.377 3.5c-3.493 0.193 -5.043 -0.97 -5.043 -4.083zm59.6 -54.827c0.387 1.75 0 3.5 -1.75 3.7l-2.91 0.577v42.773c-2.527 1.36 -4.853 2.137 -6.797 2.137 -3.107 0 -3.883 -0.973 -6.21 -3.887l-19.03 -29.94v28.967l6.02 1.363s0 3.5 -4.857 3.5l-13.39 0.777c-0.39 -0.78 0 -2.723 1.357 -3.11l3.497 -0.97v-38.3L30.48 40.667c-0.39 -1.75 0.58 -4.277 3.3 -4.473l14.367 -0.967 19.8 30.327v-26.83l-5.047 -0.58c-0.39 -2.143 1.163 -3.7 3.103 -3.89l13.4 -0.78z"
+        fill="#000"
+      />
+    </svg>
+  )
+}
+
+export function LinearIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="#222326"
+      width="100%"
+      height="100%"
+      viewBox="0 0 100 100"
+      className={className}
+      {...rest}
+    >
+      <path d="M1.22541 61.5228c-.2225-.9485.90748-1.5459 1.59638-.857L39.3342 97.1782c.6889.6889.0915 1.8189-.857 1.5964C20.0515 94.4522 5.54779 79.9485 1.22541 61.5228ZM.00189135 46.8891c-.01764375.2833.08887215.5599.28957165.7606L52.3503 99.7085c.2007.2007.4773.3075.7606.2896 2.3692-.1476 4.6938-.46 6.9624-.9259.7645-.157 1.0301-1.0963.4782-1.6481L2.57595 39.4485c-.55186-.5519-1.49117-.2863-1.648174.4782-.465915 2.2686-.77832 4.5932-.92588465 6.9624ZM4.21093 29.7054c-.16649.3738-.08169.8106.20765 1.1l64.77602 64.776c.2894.2894.7262.3742 1.1.2077 1.7861-.7956 3.5171-1.6927 5.1855-2.684.5521-.328.6373-1.0867.1832-1.5407L8.43566 24.3367c-.45409-.4541-1.21271-.3689-1.54074.1832-.99132 1.6684-1.88843 3.3994-2.68399 5.1855ZM12.6587 18.074c-.3701-.3701-.393-.9637-.0443-1.3541C21.7795 6.45931 35.1114 0 49.9519 0 77.5927 0 100 22.4073 100 50.0481c0 14.8405-6.4593 28.1724-16.7199 37.3375-.3903.3487-.984.3258-1.3542-.0443L12.6587 18.074Z" />
+    </svg>
+  )
+}
+
+export function RunRevealIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="100%"
+      height="100%"
+      viewBox="0 0 80 65"
+      fill="none"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M52.7818 0.749144H27.8651V25.806C41.6268 25.806 52.7818 14.5883 52.7818 0.749144Z"
+        fill="#A13DF7"
+      />
+      <path
+        d="M25.7387 0.677246V64.6772H0.822021V25.7341C0.822021 11.904 11.9882 0.677246 25.7387 0.677246Z"
+        fill="#A13DF7"
+      />
+      <path
+        d="M27.9232 64.6054H52.8399V39.5485C39.0782 39.5485 27.9232 50.7663 27.9232 64.6054Z"
+        fill="#A13DF7"
+      />
+      <path
+        d="M54.9686 64.6772V0.677274H79.8853V39.6204C79.8853 53.4505 68.7191 64.6772 54.9686 64.6772Z"
+        fill="#A13DF7"
+      />
+    </svg>
+  )
+}
+
+export function SecureAnnexIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      width="100%"
+      height="100%"
+      viewBox="0 0 128 128"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M39.0952 47.5685C42.3415 53.1474 50.0988 52.8835 54.41 51.0064C57.6636 48.7812 61.8374 47.7023 66.0031 48.3406C73.7329 49.5253 78.5032 56.1663 76.6579 63.1735C74.8122 70.181 67.0491 74.9014 59.319 73.7168C55.7896 73.1758 52.8782 71.4969 50.931 69.1654C45.2426 65.3145 37.7613 65.7082 32.068 67.1721L16 112H38.5607L45.9916 90.094H82.0084L89.3724 112H112L77.523 16H50.41L39.0952 47.5685Z"
+        fill="#3C6E71"
+      />
+    </svg>
+  )
+}
+
+export function TerraformIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M14.614 8.344v6.906L8.686 11.797V4.891l5.928 3.453z"
+        fill="#5c4ee5"
+      />
+      <path
+        d="M15.264 15.25l5.928-3.453V4.891l-5.928 3.453v6.906z"
+        fill="#4040b2"
+      />
+      <path
+        d="M2.108 7.942l5.928 3.454V4.488L2.108 1.035v6.907z"
+        fill="#5c4ee5"
+      />
+      <path
+        d="M14.614 16.008l-5.928-3.453v6.903l5.926 3.452v-6.902z"
+        fill="#5c4ee5"
+      />
+    </svg>
+  )
+}
+
+export function GoogleSecOpsDetectionIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      className={className}
+      {...rest}
+    >
+      <path
+        fill="#4285F4"
+        d="M12 2L3 7v10l9 5 9-5V7l-9-5zm0 2.18l6.9 3.82L12 11.82 5.1 8 12 4.18zM5 9.82l6 3.33v6.03l-6-3.33V9.82zm8 9.36v-6.03l6-3.33v6.03l-6 3.33z"
+      />
+      <circle fill="#EA4335" cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+export function GoogleSecOpsIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      className={className}
+      {...rest}
+    >
+      <path
+        fill="#4285F4"
+        d="M12 2L3 7v10l9 5 9-5V7l-9-5zm0 2.18l6.9 3.82L12 11.82 5.1 8 12 4.18zM5 9.82l6 3.33v6.03l-6-3.33V9.82zm8 9.36v-6.03l6-3.33v6.03l-6 3.33z"
+      />
+      <path fill="#34A853" d="M12 2v9.82l6.9-3.82L12 4.18V2z" opacity="0.6" />
+    </svg>
+  )
+}
+
+export function PagerDutyIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M16.965 1.18C15.085.164 13.769 0 10.683 0H3.73v14.55h6.926c2.743 0 4.8-.164 6.61-1.37 1.975-1.303 3.004-3.484 3.004-6.007 0-2.716-1.262-4.896-3.305-5.994zm-5.5 10.326h-4.21V3.113l3.977-.027c3.62-.028 5.43 1.234 5.43 4.128 0 3.113-2.248 4.292-5.197 4.292zM3.73 17.61h3.525V24H3.73Z"
+        fill="#06AC38"
+      />
+    </svg>
+  )
+}
+
+export function ExaIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <path
+        clipRule="evenodd"
+        d="M3 0h19v1.791L13.892 12 22 22.209V24H3V0zm9.62 10.348l6.589-8.557H6.03l6.59 8.557zM5.138 3.935v7.17h5.52l-5.52-7.17zm5.52 8.96h-5.52v7.17l5.52-7.17zM6.03 22.21l6.59-8.557 6.589 8.557H6.03z"
+        fill="#1F40ED"
+        fillRule="evenodd"
+      />
+    </svg>
+  )
+}
+
+export function AlertMediaIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 52.6 52.6"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <path
+        d="M47.6,0H5C2.2,0,0,2.2,0,5v42.7c0,2.7,2.2,5,5,5h42.7c2.7,0,5-2.2,5-5V5C52.6,2.2,50.4,0,47.6,0M24.2,11.6h4.5c0.7,0,1.2,0.6,1.2,1.2l-1.4,18.1c0,0.7-0.6,1.2-1.2,1.2h-1.7c-0.7,0-1.2-0.6-1.2-1.2L23,12.8C22.9,12.1,23.5,11.6,24.2,11.6M13.4,36.5l-0.7,0.7c-0.2,0.2-0.5,0.2-0.7,0l0,0c-2.7-3-4.2-6.8-4.2-10.8l0,0c0-4,1.5-7.9,4.2-10.8l0,0c0.2-0.2,0.5-0.2,0.7,0l0.7,0.7c0.2,0.2,0.2,0.5,0,0.7l0,0c-2.4,2.6-3.7,5.9-3.7,9.5l0,0c0,3.5,1.3,6.9,3.7,9.5l0,0C13.5,36,13.5,36.3,13.4,36.5M16.3,34l-0.7,0.7c-0.2,0.2-0.5,0.2-0.7,0l0,0c-2.2-2.3-3.3-5.2-3.3-8.4l0,0c0-3.1,1.2-6.1,3.3-8.4l0,0c0.2-0.2,0.5-0.2,0.7,0l0.7,0.7c0.2,0.2,0.2,0.5,0,0.7l0,0c-1.8,1.9-2.8,4.4-2.8,7l0,0c0,2.6,1,5.1,2.8,7l0,0C16.5,33.5,16.5,33.8,16.3,34M19,30.9L19,30.9c0.2,0.2,0.2,0.5,0,0.7l-0.6,0.7c-0.2,0.2-0.5,0.2-0.7,0l0,0c-1.6-1.6-2.5-3.7-2.5-6l0,0c0-2.3,0.9-4.4,2.5-6l0,0c0.2-0.2,0.5-0.2,0.7,0L19,21c0.2,0.2,0.2,0.5,0,0.7l0,0c-1.2,1.2-1.9,2.9-1.9,4.6l0,0C17.1,28,17.8,29.7,19,30.9M26.4,41.2c-2.1,0-3.7-1.7-3.7-3.7c0-2.1,1.7-3.7,3.7-3.7s3.7,1.7,3.7,3.7S28.4,41.2,26.4,41.2M35,32.3c-0.2,0.2-0.5,0.2-0.7,0l-0.6-0.7c-0.2-0.2-0.2-0.5,0-0.7l0,0c1.2-1.2,1.9-2.9,1.9-4.6l0,0c0-1.7-0.7-3.4-1.9-4.6l0,0c-0.2-0.2-0.2-0.5,0-0.7l0.6-0.7c0.2-0.2,0.5-0.2,0.7,0l0,0c1.6,1.6,2.5,3.7,2.5,6l0,0C37.5,28.6,36.6,30.7,35,32.3L35,32.3zM37.7,34.7c-0.2,0.2-0.5,0.2-0.7,0L36.4,34c-0.2-0.2-0.2-0.5,0-0.7l0,0c1.8-1.9,2.8-4.4,2.8-7l0,0c0-2.6-1-5.1-2.8-7l0,0c-0.2-0.2-0.2-0.5,0-0.7l0.7-0.7c0.2-0.2,0.5-0.2,0.7,0l0,0c2.2,2.3,3.3,5.2,3.3,8.4l0,0C41.1,29.5,39.9,32.4,37.7,34.7L37.7,34.7zM44.9,26.4c0,4-1.5,7.9-4.2,10.8l0,0c-0.2,0.2-0.5,0.2-0.7,0l-0.7-0.7c-0.2-0.2-0.2-0.5,0-0.7l0,0c2.4-2.6,3.7-5.9,3.7-9.5l0,0c0-3.5-1.3-6.9-3.7-9.5l0,0c-0.2-0.2-0.2-0.5,0-0.7l0.7-0.7c0.2-0.2,0.5-0.2,0.7,0l0,0C43.4,18.5,44.9,22.3,44.9,26.4L44.9,26.4z"
+        fill="#D64130"
+      />
+    </svg>
+  )
+}
+
+export function GophishIcon({ className, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 175 200"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...rest}
+    >
+      <g transform="translate(-286.786 -403.79)">
+        <path
+          d="M374.286 403.79l-87.5 50v100l87.5 50 87.5-50v-100l-87.5-50zm-.62 14.633l75.226 43.005v85.981l-75.226 42.99-75.225-42.99v-85.981l75.225-43.005z"
+          fill="#283F50"
+        />
+        <path
+          d="M472.126 134.444l6.911 3.808-6.753 4.081z"
+          transform="matrix(.33514 0 0 .78956 188.901 398.936)"
+          fill="#283F50"
+          stroke="#283F50"
+          strokeWidth="4"
+          strokeLinecap="square"
+        />
+        <path
+          d="M348.42 508.015v17.441-17.441z"
+          fill="none"
+          stroke="#283F50"
+          strokeWidth="4"
+        />
+        <circle
+          r="6.294"
+          cy="456.744"
+          cx="390.358"
+          fill="none"
+          stroke="#283F50"
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M390.388 527.03a20.98 20.98 0 0 1-10.49 18.17 20.98 20.98 0 0 1-20.981 0 20.98 20.98 0 0 1-10.49-18.17"
+          fill="none"
+          stroke="#283F50"
+          strokeWidth="4"
+          strokeLinecap="square"
+        />
+        <g stroke="#283F50">
+          <path d="M390.45 463.343v61.879-61.88z" fill="none" strokeWidth="4" />
+          <path
+            d="M346.635 503.574l9.522 12.33-5.745-2.01-3.777-10.32z"
+            fill="#283F50"
+          />
+        </g>
+      </g>
     </svg>
   )
 }
